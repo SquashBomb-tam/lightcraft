@@ -106,10 +106,12 @@ Not decoded yet — preview only (no permissively licensed description; black-bo
   from the same-colour pixel two to the left), the reconstruction rule for scales 2/3 is not established.
 - **Olympus compressed ORF**, **Fujifilm compressed RAF**, **Canon CR3/CRX** (M11.1), **Canon sRAW/mRAW**, lossy DNG.
 
-**Camera colour matrices:** non-DNG raws use the documented neutral fallback (camera RGB ≈ linear sRGB, flagged
-`matrix_is_fallback`) with the file's as-shot white-balance multipliers. Clean sources to evaluate next: manufacturer
-matrices stored in the files themselves (Olympus ImageProcessing `ColorMatrix`, Pentax/Panasonic equivalents) and our
-own chart-based calibration (M11.4). Adobe matrices are never used.
+**Camera colour matrices:** non-DNG raws use our own calibration where one exists (`crates/raw/src/calibration.rs`:
+Sony α7R IV / IVA so far, fitted to the camera's own Kelvin white-balance presets and the hues of its own JPEG
+previews), else the documented neutral fallback (camera RGB ≈ linear sRGB, flagged `matrix_is_fallback`) with the
+file's as-shot white-balance multipliers. Clean sources to evaluate next: the same preset-and-preview fit for more
+models, manufacturer matrices stored in the files themselves (Olympus ImageProcessing `ColorMatrix`, Pentax/Panasonic
+equivalents) and our own chart-based calibration (M11.4). Adobe matrices are never used.
 
 ## Log
 - 2026-09-30: roadmap created; M0 in progress; research docs (Lightroom reference, Rust imaging ecosystem) complete.

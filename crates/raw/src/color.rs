@@ -8,8 +8,8 @@
 //!   Bradford adaptation from the white to D50.
 //! - The as-shot white comes from `AsShotWhiteXY`, or `AsShotNeutral` converted to xy by the spec's iteration.
 //!
-//! Cameras without a colour matrix (non-DNG files until our own calibration DB exists) use a generic
-//! "camera RGB ≈ linear sRGB" model and are flagged with `matrix_is_fallback`.
+//! Non-DNG files get a matrix from our own calibrations ([`crate::calibration`]) when their camera is in it; the
+//! rest use a generic "camera RGB ≈ linear sRGB" model and are flagged with `matrix_is_fallback`.
 
 use crate::{ColorData, Mat3, RawImage};
 use lightcraft_color::{D50, D65, REC2020, SRGB, Xy, bradford, cct};
