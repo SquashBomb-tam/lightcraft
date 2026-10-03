@@ -32,19 +32,23 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
+      # Windows runners default to core.autocrlf=true; keep LF so text fixtures match byte for byte
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-test
       - name: cargo test
-        run: cargo test --workspace --locked
+        # every test target runs, so one failure doesn't hide the others
+        run: cargo test --workspace --locked --no-fail-fast
 
   package:
     name: Package (Windows x64)
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
+      - run: git config --global core.autocrlf false
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
