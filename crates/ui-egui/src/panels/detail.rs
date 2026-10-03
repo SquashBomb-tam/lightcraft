@@ -45,8 +45,8 @@ pub enum Gesture {
         start: (f32, f32),
         at: Pos2,
     },
-    /// Dragging component `comp` of `mask`: its pin (`handle` 0) or a linear gradient's start (1)
-    /// or end (2).
+    /// Dragging component `comp` of `mask`: its pin (`handle` 0), a linear gradient's start (1) or
+    /// end (2), or a radial gradient's resize, rotate or feather handle ([`super::mask_handles`]).
     MaskHandle {
         mask: u32,
         comp: usize,
@@ -475,6 +475,7 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     }
     if app.ui.right == RightPanel::Masking
         && app.ui.mask_overlay
+        && !app.ui.mask_hidden
         && let Some(m) = app.session.active_mask.and_then(|id| d.masks.iter().find(|m| m.id == id))
         && !m.components.is_empty()
     {
@@ -803,21 +804,57 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     let p = &ui.painter_at(clip);
     // (mask, component, handle, screen position) of everything that can be grabbed
     let mut grips: Vec<(u32, usize, u8, Pos2)> = Vec::new();
-    for m in &d.masks {
+    // H hid the masks: nothing is drawn or grabbed (the brush still paints)
+    let shown = if app.ui.mask_hidden { &[][..] } else { &d.masks[..] };
+    for m in shown {
         let sel = Some(m.id) == active;
         for (ci, c) in m.components.iter().enumerate() {
             match &c.shape {
-                MaskShape::Radial { center, rx, ry, angle, .. } if sel => {
-                    let pts: Vec<Pos2> = (0..64)
-                        .map(|i| {
-                            let a = i as f64 / 64.0 * std::f64::consts::TAU;
-                            let (s, co) = angle.to_radians().sin_cos();
-                            let (x, y) = (rx * a.cos(), ry * a.sin());
-                            let l = frame_long_norm(map);
-                            map.screen(Point::new(center.x + (x * co - y * s) * l.0, center.y + (x * s + y * co) * l.1))
-                        })
-                        .collect();
-                    p.add(egui::Shape::closed_line(pts, Stroke::new(1.5, Color32::from_white_alpha(230))));
+                MaskShape::Radial { center, rx, ry, angle, feather, .. } if sel => {
+                    use super::mask_handles as mh;
+                    let l = frame_long_norm(map);
+                    let ring = |k: f64| -> Vec<Pos2> {
+                        (0..=64)
+                            .map(|i| {
+                                let a = i as f64 / 64.0 * std::f64::consts::TAU;
+                                map.screen(mh::local_to_norm(*center, *angle, rx * k * a.cos(), ry * k * a.sin(), l))
+                            })
+                            .collect()
+                    };
+                    p.add(egui::Shape::line(ring(1.0), Stroke::new(1.5, Color32::from_white_alpha(230))));
+                    // the inner ring is where the fade starts (Feather)
+                    let inner = 1.0 - (feather / 100.0).clamp(0.0, 1.0);
+                    if inner > 0.02 {
+                        p.extend(egui::Shape::dashed_line(&ring(inner), Stroke::new(1.0, Color32::from_white_alpha(150)), 4.0, 4.0));
+                    }
+                    let cs = map.screen(*center);
+                    for (h, at) in mh::handles(&c.shape, l) {
+                        let q = map.screen(at);
+                        if h == mh::FEATHER {
+                            // a diamond on the inner ring
+                            let pts = vec![q + vec2(0.0, -5.0), q + vec2(5.0, 0.0), q + vec2(0.0, 5.0), q + vec2(-5.0, 0.0)];
+                            p.add(egui::Shape::convex_polygon(pts, Color32::from_gray(40), Stroke::new(1.5, Color32::WHITE)));
+                        } else {
+                            p.rect(
+                                Rect::from_center_size(q, vec2(8.0, 8.0)),
+                                1.0,
+                                Color32::WHITE,
+                                Stroke::new(1.0, Color32::from_gray(40)),
+                                StrokeKind::Middle,
+                            );
+                        }
+                        register(ui.ctx(), format!("maskHandle:{}:{ci}:{h}", m.id), Rect::from_center_size(q, vec2(14.0, 14.0)));
+                        grips.push((m.id, ci, h, q));
+                    }
+                    // the rotate handle: a knob a fixed distance beyond the top of the ellipse
+                    let top = map.screen(mh::local_to_norm(*center, *angle, 0.0, -ry, l));
+                    let out = top - cs;
+                    let dir = if out.length() > 1e-3 { out.normalized() } else { vec2(0.0, -1.0) };
+                    let knob = top + dir * 22.0;
+                    p.line_segment([top, knob], Stroke::new(1.0, Color32::from_white_alpha(200)));
+                    p.circle(knob, 5.0, Color32::from_gray(40), Stroke::new(1.5, Color32::WHITE));
+                    register(ui.ctx(), format!("maskHandle:{}:{ci}:{}", m.id, mh::ROTATE), Rect::from_center_size(knob, vec2(14.0, 14.0)));
+                    grips.push((m.id, ci, mh::ROTATE, knob));
                 }
                 MaskShape::Linear { start, end } if sel => {
                     let (a, b) = (map.screen(*start), map.screen(*end));
@@ -891,6 +928,11 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
             })
             .copied()
     };
+    if matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if resp.hover_pos().and_then(hit).is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && let Some((mid, ..)) = hit(q)
@@ -903,7 +945,7 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     {
         let grip = hit(q).map(|(m, c, h, _)| (m, c, h)).or_else(|| {
             // anywhere on the photo drags the selected linear gradient
-            let m = d.masks.iter().find(|m| Some(m.id) == active)?;
+            let m = shown.iter().find(|m| Some(m.id) == active)?;
             matches!(m.components.first()?.shape, MaskShape::Linear { .. }).then_some((m.id, 0, 0))
         });
         if let Some((mask, comp, handle)) = grip {
@@ -920,7 +962,11 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     {
         let n = map.norm(q);
         let n0 = map.norm(q - resp.drag_delta());
-        let new_shape = moved_shape(shape, handle, Point::new(n.x - n0.x, n.y - n0.y), n);
+        let new_shape = if handle >= super::mask_handles::RIGHT {
+            super::mask_handles::dragged(shape, handle, n, frame_long_norm(map), ui.input(|i| i.modifiers.shift))
+        } else {
+            moved_shape(shape, handle, Point::new(n.x - n0.x, n.y - n0.y), n)
+        };
         let _ = app.run("mask.update", json!({"id": mask, "component": comp, "shape": new_shape}));
     }
     if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {

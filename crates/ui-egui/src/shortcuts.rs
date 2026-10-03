@@ -204,6 +204,11 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
                 let _ = app.run("spot.refreshSource", json!({}));
                 continue;
             }
+            // H hides / shows the masks while masking (opens Remove elsewhere)
+            if f == "panel.remove" && app.ui.right == crate::state::RightPanel::Masking {
+                let _ = app.run("view.maskHide", json!({}));
+                continue;
+            }
             // Shift+O cycles the mask overlay mode while masking (the crop overlay elsewhere)
             if f == "view.cropOverlay" && app.ui.right == crate::state::RightPanel::Masking {
                 let _ = app.run("view.maskOverlayMode", json!({}));

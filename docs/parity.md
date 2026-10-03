@@ -89,7 +89,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 **Still missing / broken:**
 - No command yet: F1 help, ⇧6–9 label + advance (verify the rest of the old list: full screen, settings, stacks,
   visualize spots and merges have commands now).
-- `H` opens Remove; Lightroom also uses it (Classic) to hide pins — pins toggle from View → Show Mask Pins.
+- `H` hides the masks (overlay, pins, outlines) while masking, like Lightroom Classic, and opens Remove elsewhere.
 - ⌘M / ⌘H / ⌘Q / ⌘W rely on the platform window defaults (unverified).
 
 <!-- Sections below hold one row per id. Keep the column order: Id | Feature | Tier | Status | Evidence | Notes. -->
@@ -317,7 +317,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | LR-MASK-LANDSCAPE | Landscape classes | P2 | ⬜ | | shape exists, evaluates empty |
 | LR-MASK-BRUSH | Brush mask | P0 | ✅ | `cmd:tool.brush`, `cmd:mask.brushStroke` (`autoMask`), `crates/pipeline/src/masks.rs` | size/feather/flow/density/erase; Auto Mask: dabs weighted by similarity to the colour under the dab centre, refined by a guided filter on luminance (CPU + GPU); no A/B brushes, no pressure |
 | LR-MASK-LINEAR | Linear gradient | P0 | ✅ | `cmd:tool.linear`, `cmd:mask.update` | |
-| LR-MASK-RADIAL | Radial gradient | P0 | ✅ | `cmd:tool.radial`, `cmd:mask.update` | |
+| LR-MASK-RADIAL | Radial gradient | P0 | ✅ | `cmd:tool.radial`, `cmd:mask.update`, `crates/ui-egui/src/panels/mask_handles.rs` | on the photo: four edge handles resize (⇧ keeps proportions), a knob above the top rotates (⇧ snaps to 15°), a diamond on the dashed inner ring sets Feather; Feather slider in the panel |
 | LR-MASK-COLORRANGE | Colour range | P1 | 🟡 | `cmd:mask.add` (`colorRange`) | renders; sampling UX unverified |
 | LR-MASK-LUMRANGE | Luminance range | P1 | 🟡 | `cmd:mask.add` (`luminanceRange`) | no luminance-map display |
 | LR-MASK-DEPTHRANGE | Depth range | P2 | ⬜ | | shape exists, needs depth data |
@@ -677,7 +677,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-ESC | Leave tool / view — Esc | P0 | ✅ | `cmd:view.back` | |
 | KEY-COMMIT | Commit tool — Return | P1 | ✅ | `cmd:tool.done` | Return closes Crop / Remove / Red Eye / Masking back to Edit (edits apply live, as in Lightroom) |
 | KEY-DELETE-PIN | Delete selected pin — ⌫ | P0 | ✅ | `cmd:mask.delete`, `cmd:spot.delete` | ⌫ deletes the active mask (Masking) or the selected spot (Remove), never the photo while retouching |
-| KEY-HIDEPINS | Hide pins — H | P2 | ⬜ | | H = Remove panel |
+| KEY-HIDEPINS | Hide pins — H | P2 | ✅ | `cmd:view.maskHide`, `crates/ui-egui/src/tests_masking.rs` | while masking H hides the overlay, pins, outlines and handles (edits still apply; leaving the panel or adding a mask shows them again); H opens Remove elsewhere |
 
 ## Lightroom Classic extras
 

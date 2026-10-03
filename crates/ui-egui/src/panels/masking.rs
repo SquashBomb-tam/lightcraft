@@ -83,6 +83,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
                 ui.painter().text(pos2(r.center().x, r.bottom() - 9.0), Align2::CENTER_CENTER, *label, t.font(10.5), t.text_dim);
                 if resp.clicked() {
+                    // a new mask is drawn on the photo, so masks hidden with H show again
+                    app.ui.mask_hidden = false;
                     match *kind {
                         "brush" | "linear" | "radial" => {
                             app.ui.tool = kind.to_string();
@@ -204,8 +206,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     lightcraft_develop::MaskOp::Intersect => "∩ ",
                 };
                 ui.label(format!("{op}{label}{}", if c.invert { " (inverted)" } else { "" }));
-                let _ = i;
             });
+            // a radial gradient's Feather (also the diamond handle on the photo)
+            if let MaskShape::Radial { feather, .. } = c.shape {
+                let spec = ControlSpec { default: 50.0, ..spec("maskFeather", "Feather", 0.0, 100.0, 1.0, 0, Track::Plain) };
+                let out = ui.push_id(("maskFeather", i), |ui| slider(ui, &spec, feather, true, None)).inner;
+                let shape = c.shape.clone();
+                apply_slider_out(app, &spec, out, |app, v| {
+                    let MaskShape::Radial { center, rx, ry, angle, invert, .. } = shape.clone() else { return Ok(json!(null)) };
+                    let feather = v.clamp(0.0, 100.0);
+                    app.run("mask.update", json!({"component": i, "shape": MaskShape::Radial { center, rx, ry, angle, feather, invert }}))
+                });
+            }
         }
         ui.add_space(6.0);
         ui.horizontal(|ui| {

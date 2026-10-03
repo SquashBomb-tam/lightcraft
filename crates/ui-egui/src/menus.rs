@@ -38,6 +38,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.maskOverlayMode", "Cycle Mask Overlay Mode", None, "View"),
     ("view.maskOverlayColor", "Cycle Mask Overlay Color", None, "View"),
     ("view.maskPins", "Show Mask Pins", None, "View"),
+    // H in the Masking panel (elsewhere it opens Remove)
+    ("view.maskHide", "Hide Masks", None, "View"),
     ("view.visualizeSpots", "Visualize Spots", Some("A"), "View"),
     ("view.cropOverlay", "Cycle Crop Overlay", Some("Shift+O"), "View"),
     ("view.cropOverlayOrientation", "Cycle Crop Overlay Orientation", None, "View"),
@@ -129,6 +131,10 @@ fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str
     }
     if p != RightPanel::Masking && app.ui.tool != "wbPicker" {
         app.ui.tool.clear();
+    }
+    // masks hidden with H come back when the Masking panel is left
+    if app.ui.right != RightPanel::Masking {
+        app.ui.mask_hidden = false;
     }
     let _ = app.session.end_interaction();
 }
@@ -373,6 +379,17 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         "view.maskPins" => {
             app.ui.mask_pins = p.get("show").and_then(Value::as_bool).unwrap_or(!app.ui.mask_pins);
             Ok(json!({"maskPins": app.ui.mask_pins}))
+        }
+        "view.maskHide" => {
+            app.ui.mask_hidden = match p.get("hide") {
+                None | Some(Value::Null) => !app.ui.mask_hidden,
+                Some(v) => match v.as_bool() {
+                    Some(b) => b,
+                    None => return Some(Err("view.maskHide: `hide` is true or false".into())),
+                },
+            };
+            app.toast(&ctx, if app.ui.mask_hidden { "Masks Hidden (H to show)" } else { "Masks Shown" });
+            Ok(json!({"maskHidden": app.ui.mask_hidden}))
         }
         "view.visualizeSpots" => {
             // like Lightroom's A: opens the Remove tool with the view on, or toggles it there
