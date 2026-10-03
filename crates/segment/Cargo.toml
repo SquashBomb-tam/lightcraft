@@ -1,0 +1,24 @@
+[package]
+name = "lightcraft-segment"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft AI segmentation: sky, subject and object masks from permissively licensed models, pure-Rust inference (L3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-raster = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+# Inference runs natively only: the browser build ships no models (its AI masks use the
+# classical estimates).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]

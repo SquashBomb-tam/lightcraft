@@ -1,12 +1,13 @@
 //! Workspace tooling: `cargo xtask <command>`.
 //!
-//! Pure Rust (std + serde_json; flate2/brotli for the web bundle). External tools (`cargo`, `curl`, `tar`) are
+//! Pure Rust (std + serde_json; flate2/brotli for the web bundle; candle + sha2 for the AI models). External tools (`cargo`, `curl`, `tar`) are
 //! invoked through `std::process::Command`.
 
 mod assets;
 mod bench;
 mod ico;
 mod layers;
+mod models;
 mod parity;
 mod stats;
 mod version;
@@ -34,6 +35,9 @@ commands:
                   build the browser app (apps/lightcraft-web) into <target>/web/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
   ci              fmt --check, clippy -D warnings, test, parity refs, layers, assets, wasm (stops at first failure)
+  models [--download] [--dir DIR]
+                  convert the AI mask models (models/download/*, pinned SHA-256) into models/*.safetensors;
+                  --download fetches the upstream weight files first (see models/README.md)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite and CC0 raw samples (raw.pixls.us) into corpus/
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -53,6 +57,7 @@ fn main() -> ExitCode {
         Some("web") => web::run(&rest),
         Some("ci") => cmd_ci(),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
+        Some("models") => models::run(&root(), &rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");

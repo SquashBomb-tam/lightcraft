@@ -65,27 +65,40 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new("Create New Mask").color(t.text_dim));
         ui.add_space(6.0);
-        let tiles: [(&str, &str, Icon); 8] = [
+        let tiles: [(&str, &str, Icon); 9] = [
             ("subject", "Subject", Icon::Subject),
             ("sky", "Sky", Icon::Sky),
             ("background", "Background", Icon::Subject),
+            ("object", "Object", Icon::Object),
             ("brush", "Brush", Icon::Brush),
             ("linear", "Linear", Icon::Linear),
             ("radial", "Radial", Icon::Radial),
             ("luminanceRange", "Luminance", Icon::Sliders),
             ("colorRange", "Color", Icon::Picker),
         ];
+        let detecting = app.session.media.segmenter.as_ref().is_some_and(|s| s.busy());
         egui::Grid::new("mask-tiles").spacing(vec2(6.0, 6.0)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {
-                let (r, resp) = ui.allocate_exact_size(vec2(52.0, 52.0), Sense::click());
+                // Object has no classical fallback: without its model the tile is disabled
+                let enabled = *kind != "object" || crate::menus::object_model(app);
+                let (r, resp) = ui.allocate_exact_size(vec2(52.0, 52.0), if enabled { Sense::click() } else { Sense::hover() });
                 register(ui.ctx(), format!("maskNew:{kind}"), r);
-                ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.hover } else { t.inset });
-                paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
-                ui.painter().text(pos2(r.center().x, r.bottom() - 9.0), Align2::CENTER_CENTER, *label, t.font(10.5), t.text_dim);
+                let (fg, dim) = if enabled { (t.text_label, t.text_dim) } else { (t.text_dim.gamma_multiply(0.5), t.text_dim.gamma_multiply(0.5)) };
+                ui.painter().rect_filled(r, 4.0, if resp.hovered() && enabled { t.hover } else { t.inset });
+                paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, fg);
+                ui.painter().text(pos2(r.center().x, r.bottom() - 9.0), Align2::CENTER_CENTER, *label, t.font(10.5), dim);
+                let resp = if enabled {
+                    resp
+                } else {
+                    resp.on_hover_text("Select Object needs the AI models, which aren't installed with this copy of LightCraft")
+                };
                 if resp.clicked() {
                     // a new mask is drawn on the photo, so masks hidden with H show again
                     app.ui.mask_hidden = false;
                     match *kind {
+                        "object" => {
+                            let _ = app.run("tool.object", json!({}));
+                        }
                         "brush" | "linear" | "radial" => {
                             app.ui.tool = kind.to_string();
                             if *kind != "brush" {
@@ -102,6 +115,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
             }
         });
+        if detecting {
+            // a model is working on this photo (a few seconds the first time)
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(12.0).color(t.text_dim));
+                let r = ui.label(egui::RichText::new("Detecting…").color(t.text_dim)).rect;
+                register(ui.ctx(), "maskDetecting", r);
+            });
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        }
     });
     divider(ui);
     // mask list
@@ -349,12 +372,15 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         ("radial", "Radial Gradient"),
         ("sky", "Sky"),
         ("subject", "Subject"),
+        ("object", "Object"),
         ("luminanceRange", "Luminance Range"),
     ] {
         if ui.button(label).clicked() {
             if kind == "brush" {
                 app.ui.tool = "brush".into();
                 app.ui.brush_erase = op == "subtract";
+            } else if kind == "object" {
+                let _ = app.run("tool.object", json!({"op": op}));
             } else {
                 let _ = app.run("mask.addComponent", json!({"op": op, "kind": kind}));
             }

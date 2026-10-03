@@ -6,7 +6,8 @@
 
   Per-machine install into Program Files, a Start Menu shortcut, `.pcraft` owned by LightCraft,
   and LightCraft offered under "Open with" for PSD/PSB and the image formats it reads (without
-  taking over the user's default app for them).
+  taking over the user's default app for them). With `-d ModelsDir=...` the AI mask models and
+  their licences go into a models folder beside the executables (models/README.md).
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
@@ -31,12 +32,21 @@
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="LightCraft" />
+      <Directory Id="INSTALLFOLDER" Name="LightCraft">
+<?ifdef ModelsDir?>
+        <Directory Id="ModelsFolder" Name="models">
+          <Directory Id="ModelLicensesFolder" Name="licenses" />
+        </Directory>
+<?endif?>
+      </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
 
     <Feature Id="Main" Title="LightCraft" Level="1">
       <ComponentGroupRef Id="LightcraftFiles" />
+<?ifdef ModelsDir?>
+      <ComponentGroupRef Id="ModelFiles" />
+<?endif?>
     </Feature>
   </Package>
 
@@ -57,4 +67,32 @@
       </Component>
     </ComponentGroup>
   </Fragment>
+<?ifdef ModelsDir?>
+
+  <Fragment>
+    <ComponentGroup Id="ModelFiles">
+      <Component Id="ModelObject" Directory="ModelsFolder">
+        <File Id="ModelObjectFile" Source="$(var.ModelsDir)\object.safetensors" KeyPath="yes" />
+      </Component>
+      <Component Id="ModelSubject" Directory="ModelsFolder">
+        <File Id="ModelSubjectFile" Source="$(var.ModelsDir)\subject.safetensors" KeyPath="yes" />
+      </Component>
+      <Component Id="ModelSky" Directory="ModelsFolder">
+        <File Id="ModelSkyFile" Source="$(var.ModelsDir)\sky.safetensors" KeyPath="yes" />
+      </Component>
+      <Component Id="ModelReadme" Directory="ModelsFolder">
+        <File Id="ModelReadmeFile" Source="$(var.ModelsDir)\README.md" KeyPath="yes" />
+      </Component>
+      <Component Id="ModelLicenseApache" Directory="ModelLicensesFolder">
+        <File Id="ModelLicenseApacheFile" Source="$(var.ModelsDir)\licenses\Apache-2.0.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="ModelLicenseSky" Directory="ModelLicensesFolder">
+        <File Id="ModelLicenseSkyFile" Source="$(var.ModelsDir)\licenses\MIT-Sky-Segmentation.txt" KeyPath="yes" />
+      </Component>
+      <Component Id="ModelLicenseTinyVit" Directory="ModelLicensesFolder">
+        <File Id="ModelLicenseTinyVitFile" Source="$(var.ModelsDir)\licenses\MIT-TinyViT.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+<?endif?>
 </Wix>

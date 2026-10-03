@@ -362,6 +362,35 @@ impl crate::Session {
         self.media.preview_loader = Some(fs_preview_loader());
         self
     }
+
+    /// Use the AI segmentation models in `dir` for Sky / Subject / Background / Object masks
+    /// (computed results are kept in the library's `masks/` folder).
+    pub fn with_models(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.set_models(Some(dir.into()));
+        self
+    }
+
+    /// Use the models installed with the running application, if there are any
+    /// ([`lightcraft_segment::find_models_dir`]); without them AI masks use the classical estimates.
+    pub fn with_installed_models(mut self) -> Self {
+        self.use_installed_models();
+        self
+    }
+
+    /// [`Self::with_installed_models`] on an existing session.
+    pub fn use_installed_models(&mut self) {
+        let dir = lightcraft_segment::find_models_dir(std::env::current_exe().ok().as_deref());
+        log::info!("AI mask models: {}", dir.as_deref().map_or_else(|| "none installed".into(), |d| d.display().to_string()));
+        self.set_models(dir);
+    }
+
+    /// Install (or with `None` remove) the AI segmentation models.
+    pub fn set_models(&mut self, dir: Option<std::path::PathBuf>) {
+        self.media.segmenter = dir.map(|d| std::sync::Arc::new(crate::segment::SegService::new(lightcraft_segment::Segmenter::new(d))));
+        if let (Some(svc), Some(lib)) = (&self.media.segmenter, &self.library) {
+            svc.set_disk(lib.on_disk.then(|| lib.dir.join("masks")));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -382,6 +411,82 @@ mod tests {
         b.extend_from_slice(&(jpeg.len() as u32).to_be_bytes());
         b.extend_from_slice(&jpeg);
         b
+    }
+
+    /// The whole chain with the installed models: a Sky mask brightens the sky and leaves the
+    /// ground alone, an Object box selects the disc it was drawn around, and the maps are kept in
+    /// the library's `masks/` folder for the next session.
+    #[test]
+    #[ignore = "needs the models: cargo xtask models --download"]
+    fn ai_masks_select_what_they_say() {
+        use serde_json::json;
+        let models = lightcraft_segment::find_models_dir(None).expect("models directory");
+        let dir = std::env::temp_dir().join(format!("lc-ai-masks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 1200 × 750 (large enough for final maps): blue sky above y ≈ 330, ground below, a red
+        // disc of radius 130 at (820, 480)
+        let horizon = |x: usize| 330.0 + 30.0 * (x as f64 / 110.0).sin();
+        let disc = |x: usize, y: usize| (x as f64 - 820.0).powi(2) + (y as f64 - 480.0).powi(2) < 130.0f64.powi(2);
+        let img = lightcraft_raster::Rgba8::from_fn(1200, 750, |x, y| {
+            if disc(x, y) {
+                [190, 50, 40, 255]
+            } else if (y as f64) < horizon(x) {
+                let t = y as f64 / horizon(x);
+                [(90.0 + 60.0 * t) as u8, (140.0 + 50.0 * t) as u8, (240.0 - 25.0 * t) as u8, 255]
+            } else {
+                let tex = (20.0 * (x as f64 * 0.2).sin() * (y as f64 * 0.09).cos()) as i32;
+                [(82 + tex) as u8, (70 + tex) as u8, (42 + tex) as u8, 255]
+            }
+        });
+        let path = dir.join("landscape.png");
+        std::fs::write(&path, lightcraft_codecs::encode_png(&EncodeImage::rgba8(&img), &EncodeMeta::default()).unwrap()).unwrap();
+
+        let mut s = crate::Session::new().with_fs().with_models(&models);
+        s.open_library(dir.join("library"), false).unwrap();
+        let m = s.execute("mask.models", &json!({})).unwrap();
+        assert_eq!((m["sky"].as_bool(), m["subject"].as_bool(), m["object"].as_bool()), (Some(true), Some(true), Some(true)), "{m}");
+        let r = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+        let id = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+        s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+        // luma at the sky, the ground, the disc, the ground just outside the object's box, and
+        // the ground inside the box but off the disc (only the model tells that from the disc)
+        let points = [(300, 120), (300, 650), (820, 480), (640, 700), (700, 600)];
+        let sample = |s: &mut crate::Session| -> [f64; 5] {
+            let im = s.render_now(id, 600, 375).unwrap().image;
+            assert_eq!((im.width, im.height), (600, 375));
+            points.map(|(x, y)| {
+                let p = im.get(x / 2, y / 2);
+                0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64
+            })
+        };
+        let before = sample(&mut s);
+
+        s.execute("mask.add", &json!({"kind": "sky"})).unwrap();
+        s.execute("mask.adjust", &json!({"values": {"exposure": 1.5}})).unwrap();
+        let sky = sample(&mut s);
+        assert!(sky[0] > before[0] + 15.0, "the sky got brighter: {before:?} → {sky:?}");
+        for i in 1..5 {
+            assert!((sky[i] - before[i]).abs() < 2.0, "point {i} didn't: {before:?} → {sky:?}");
+        }
+
+        // a box around the disc, darkened
+        s.execute("mask.add", &json!({"kind": "object", "box": [680.0 / 1200.0, 340.0 / 750.0, 960.0 / 1200.0, 620.0 / 750.0]})).unwrap();
+        s.execute("mask.adjust", &json!({"values": {"exposure": -1.5}})).unwrap();
+        let both = sample(&mut s);
+        assert!(both[2] < sky[2] - 10.0, "the disc got darker: {sky:?} → {both:?}");
+        for i in [0, 1, 3, 4] {
+            assert!((both[i] - sky[i]).abs() < 2.0, "point {i} didn't: {sky:?} → {both:?}");
+        }
+
+        // the maps were kept for the next session
+        let kept = std::fs::read_dir(dir.join("library/masks"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "seg"))
+            .count();
+        assert!(kept >= 2, "sky and object maps on disk: {kept}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

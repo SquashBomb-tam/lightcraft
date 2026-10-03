@@ -70,6 +70,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("tool.brush", "Brush", Some("B"), "Window>Tools"),
     ("tool.linear", "Linear Gradient", Some("L"), "Window>Tools"),
     ("tool.radial", "Radial Gradient", Some("R"), "Window>Tools"),
+    ("tool.object", "Select Object", None, "Window>Tools"),
     ("tool.wbPicker", "White Balance Selector", Some("W"), "Window>Tools"),
     ("tool.none", "No Tool", None, ""),
     // brush size / feather of the active brush (Masking brush, Remove tool and its selected spot)
@@ -485,6 +486,7 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             if app.ui.dialog.is_none() && matches!(app.ui.right, Crop | Remove | RedEye | Masking) {
                 let _ = app.session.end_interaction();
                 app.ui.tool.clear();
+                app.ui.object_op.take();
                 app.ui.right = Edit;
             }
             Ok(Value::Null)
@@ -516,6 +518,24 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = tool.into();
                     return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
+                }
+                "object" => {
+                    // drag a box around an object or click it (see `detail::object_tool`)
+                    if !object_model(app) {
+                        let e = "Select Object needs the AI models, which aren't installed with this copy of LightCraft";
+                        app.toast(&ctx, e);
+                        return Some(Err(format!("tool.object: {e}")));
+                    }
+                    app.ui.right = RightPanel::Masking;
+                    app.ui.view = ViewMode::Detail;
+                    app.ui.tool = "object".into();
+                    app.ui.mask_hidden = false;
+                    app.ui.object_op = match p.get("op").and_then(Value::as_str) {
+                        None => None,
+                        Some(op @ ("add" | "subtract" | "intersect")) => Some(op.to_string()),
+                        Some(other) => return Some(Err(format!("tool.object: unknown op `{other}` (add|subtract|intersect)"))),
+                    };
+                    app.toast(&ctx, "Drag a box around an object or click it (Shift+click adds, Alt+click removes)");
                 }
                 "wbPicker" => {
                     app.ui.right = RightPanel::Edit;
@@ -759,8 +779,14 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     Some(r)
 }
 
+/// Whether the Object model is installed (Select Object has no classical fallback).
+pub fn object_model(app: &LightcraftApp) -> bool {
+    app.session.media.segmenter.as_ref().is_some_and(|s| s.segmenter().has_objects())
+}
+
 pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
+        "tool.object" => app.session.active().is_some() && object_model(app),
         s if s.starts_with("panel.") || s.starts_with("tool.") || s.starts_with("section.") => app.session.active().is_some() || s == "panel.close",
         "app.export" | "dialog.export" | "dialog.createPreset" | "dialog.rename" | "dialog.captureTime" | "dialog.copySettings" => {
             app.session.active().is_some()

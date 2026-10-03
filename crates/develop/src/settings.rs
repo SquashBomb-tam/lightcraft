@@ -772,8 +772,15 @@ pub enum MaskShape {
     Subject,
     Sky,
     Background,
+    /// An object picked on the photo: points on it (`hint`), optionally a box dragged around it
+    /// (`bbox`: x0, y0, x1, y1) and points that are not on it (`exclude`), all normalized.
     Object {
+        #[serde(default)]
         hint: Vec<Point>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bbox: Option<[f64; 4]>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        exclude: Vec<Point>,
     },
     People {
         person: u32,

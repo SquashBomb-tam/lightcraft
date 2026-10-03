@@ -32,6 +32,7 @@ pub mod optics;
 pub mod output;
 pub mod profiles;
 pub mod redeye;
+pub mod segmaps;
 pub mod spots;
 pub mod tone;
 pub mod transform;
@@ -39,6 +40,7 @@ pub mod upright;
 pub mod visualize;
 
 pub use output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc};
+pub use segmaps::Segmentations;
 pub use visualize::{MaskView, Overlay};
 
 use lightcraft_develop::{DevelopSettings, Treatment};
@@ -332,13 +334,30 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
 
 /// Render `src` with settings `s`.
 pub fn render(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Rendered {
-    render_impl(Src::Borrowed(src), info, s, req, None)
+    render_impl(Src::Borrowed(src), info, s, req, None, &Segmentations::NONE)
+}
+
+/// [`render`] with the photo's AI segmentations for its Sky / Subject / Background / Object masks.
+pub fn render_with(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, seg: &Segmentations) -> Rendered {
+    render_impl(Src::Borrowed(src), info, s, req, None, seg)
 }
 
 /// [`render`], reusing (and refreshing) the intermediate results in `cache`. The output is
 /// identical to [`render`]'s.
 pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: &StageCache) -> Rendered {
-    render_impl(Src::Shared(src), info, s, req, Some(cache))
+    render_impl(Src::Shared(src), info, s, req, Some(cache), &Segmentations::NONE)
+}
+
+/// [`render_cached`] with the photo's AI segmentations (see [`render_with`]).
+pub fn render_cached_with(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: &StageCache,
+    seg: &Segmentations,
+) -> Rendered {
+    render_impl(Src::Shared(src), info, s, req, Some(cache), seg)
 }
 
 enum Src<'a> {
@@ -346,7 +365,14 @@ enum Src<'a> {
     Shared(&'a Arc<Rgb32f>),
 }
 
-fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
+fn render_impl(
+    src: Src<'_>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: Option<&StageCache>,
+    seg: &Segmentations,
+) -> Rendered {
     // `Instant::now()` panics on wasm32-unknown-unknown: only read the clock when profiling.
     let lap = |what: &str, t: &mut Option<std::time::Instant>| {
         if let Some(t) = t {
@@ -389,7 +415,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if p.key == lin_key => p,
         _ => local::Planes { key: lin_key, ..Default::default() },
     };
-    let prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes);
+    let prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes, seg);
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
@@ -406,20 +432,21 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let histogram = Histogram::of_srgb8(&image);
     lap("histogram", &mut t);
     let mut image = image;
-    let mask = overlay_alpha(req.overlay, &plan, &prep);
+    let mask = overlay_alpha(req.overlay, &plan, &prep, seg);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref());
     Rendered { image, histogram, deep: None }
 }
 
 /// The alpha plane a mask overlay shows: the one the render evaluated, or (for a hidden mask) a
 /// fresh evaluation.
-fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> {
+fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared, seg: &Segmentations) -> Option<Plane> {
     let m = o.mask(&plan.settings)?;
     if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
         return Some(e.alpha.clone());
     }
     let ev = plan.settings.light.exposure as f32;
-    Some(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev))
+    let x = masks::Inputs { frame: &plan.frame, w: plan.w, h: plan.h, img: &prep.img, log_l: &prep.log_l, ev, seg };
+    Some(masks::evaluate_one(m, &x))
 }
 
 /// Convenience: render a before/after pair side by side is up to the UI; this renders "before"

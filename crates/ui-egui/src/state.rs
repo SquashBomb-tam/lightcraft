@@ -202,6 +202,10 @@ pub struct UiState {
     /// the adjustments underneath can be judged; H again shows them. The masks still apply.
     #[serde(skip)]
     pub mask_hidden: bool,
+    /// Select Object adding to / subtracting from the selected mask ("add" | "subtract" |
+    /// "intersect") instead of creating a new one.
+    #[serde(skip)]
+    pub object_op: Option<String>,
     /// Mirroring of the triangle / spiral crop guides (0..4).
     pub crop_overlay_orient: u8,
     pub crop_overlay: CropOverlay,
@@ -414,6 +418,7 @@ impl Default for UiState {
             mask_overlay_opacity: 50.0,
             mask_pins: true,
             mask_hidden: false,
+            object_op: None,
             crop_overlay: CropOverlay::Thirds,
             crop_overlay_orient: 0,
             show_filenames: true,

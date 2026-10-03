@@ -65,6 +65,8 @@ pub enum Icon {
     Radial,
     Sky,
     Subject,
+    /// Select Object: a selection box's corners around a shape.
+    Object,
     Picker,
     Rotate,
     Flip,
@@ -403,6 +405,12 @@ pub fn paint(p: &Painter, rect: Rect, icon: Icon, color: Color32) {
             pen.circle(10.0, 7.0, 3.0);
             pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
             pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+        }
+        Object => {
+            for (x, y, dx, dy) in [(3.0, 3.0, 1.0, 1.0), (17.0, 3.0, -1.0, 1.0), (3.0, 17.0, 1.0, -1.0), (17.0, 17.0, -1.0, -1.0)] {
+                pen.line(&[(x + 4.0 * dx, y), (x, y), (x, y + 4.0 * dy)]);
+            }
+            pen.circle(10.0, 10.0, 3.5);
         }
         Picker => {
             pen.line(&[(4.0, 16.0), (11.5, 8.5)]);

@@ -52,6 +52,10 @@ pub enum Gesture {
         comp: usize,
         handle: u8,
     },
+    /// Select Object: a box being dragged from `a` (normalized).
+    ObjectBox {
+        a: Point,
+    },
     /// Guided Upright: a guide being drawn from `a` (normalized transformed coordinates).
     Guide {
         a: Point,
@@ -918,6 +922,10 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
         }
         return;
     }
+    if app.ui.tool == "object" {
+        object_tool(app, ui, resp, map, d);
+        return;
+    }
     // the grip under the pointer: the selected mask's first, then the nearest
     let hit = |q: Pos2| {
         grips
@@ -972,6 +980,73 @@ fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Respons
     if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {
         app.gesture = None;
         let _ = app.run("develop.endInteraction", json!({}));
+    }
+}
+
+/// Select Object on the photo: drag a box around an object, or click it, to make a new Object mask
+/// (or, from the Add / Subtract menu, a component of the selected mask). Shift+click adds a point
+/// on the object to the selected mask's last Object component, Alt+click one that is not on it.
+fn object_tool(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
+    let mods = ui.input(|i| i.modifiers);
+    if resp.drag_started()
+        && let Some(a) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+    {
+        app.gesture = Some(Gesture::ObjectBox { a: map.norm(a) });
+    }
+    if let (Some(Gesture::ObjectBox { a }), Some(q)) = (&app.gesture, resp.interact_pointer_pos()) {
+        let r = Rect::from_two_pos(map.screen(*a), q);
+        let s = Stroke::new(1.5, Color32::WHITE);
+        let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+        p.extend(egui::Shape::dashed_line(&pts, s, 6.0, 4.0));
+    }
+    let create = |app: &mut LightcraftApp, prompt: serde_json::Value| {
+        let mut params = prompt;
+        params["kind"] = json!("object");
+        let r = match app.ui.object_op.clone() {
+            Some(op) if app.session.active_mask.is_some() => {
+                params["op"] = json!(op);
+                app.run("mask.addComponent", params)
+            }
+            _ => app.run("mask.add", params),
+        };
+        if r.is_ok() {
+            app.ui.object_op = None;
+        }
+    };
+    if resp.drag_stopped()
+        && let Some(Gesture::ObjectBox { a }) = app.gesture.take()
+        && let Some(q) = resp.interact_pointer_pos()
+    {
+        let b = map.norm(q);
+        // too small to be a box: a click
+        if map.screen(a).distance(q) < 6.0 {
+            create(app, json!({"points": [[b.x, b.y]]}));
+        } else {
+            create(app, json!({"box": [a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)]}));
+        }
+        return;
+    }
+    if resp.clicked()
+        && let Some(q) = resp.interact_pointer_pos()
+    {
+        let n = map.norm(q);
+        // Shift / Alt refine the selected mask's last Object component
+        let refine = (mods.shift || mods.alt).then(|| d.masks.iter().find(|m| Some(m.id) == app.session.active_mask)).flatten().and_then(|m| {
+            m.components.iter().enumerate().rev().find(|(_, c)| matches!(c.shape, MaskShape::Object { .. })).map(|(i, c)| (m.id, i, c.shape.clone()))
+        });
+        match refine {
+            Some((mid, ci, MaskShape::Object { mut hint, bbox, mut exclude })) => {
+                if mods.alt {
+                    exclude.push(n);
+                } else {
+                    hint.push(n);
+                }
+                let _ = app.run("mask.update", json!({"id": mid, "component": ci, "shape": MaskShape::Object { hint, bbox, exclude }}));
+            }
+            _ => create(app, json!({"points": [[n.x, n.y]]})),
+        }
     }
 }
 

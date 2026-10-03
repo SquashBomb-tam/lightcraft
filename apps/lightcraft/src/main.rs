@@ -274,7 +274,7 @@ fn main() -> eframe::Result {
         "LightCraft",
         options,
         Box::new(move |cc| {
-            let session = open_session(in_memory, library_dir, seed_demo && files.is_empty());
+            let session = open_session(in_memory, library_dir, seed_demo && files.is_empty()).with_installed_models();
             let mut app = LightcraftApp::new(session, services());
             if let Some(ui) = prefs {
                 app.ui = ui;

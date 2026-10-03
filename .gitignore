@@ -6,3 +6,6 @@ plan/
 /log
 .DS_Store
 .claude/
+/models/*
+!/models/README.md
+!/models/licenses/

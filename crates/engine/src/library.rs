@@ -7,6 +7,7 @@
 //!   presets.json   view.json        (user presets + favourites; last source/filter/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
+//!   masks/         (AI mask segmentations: sky, subject, objects; safe to delete)
 //!   Originals/     (photos imported with "copy into library")
 //! ```
 //!
@@ -202,6 +203,9 @@ impl Session {
         self.media.clear_sources();
         if on_disk {
             self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes());
+        }
+        if let Some(svc) = &self.media.segmenter {
+            svc.set_disk(on_disk.then(|| dir.join("masks")));
         }
         let view_written = self.view_json();
         self.library = Some(Library { dir, on_disk, journal, files, report, last_error: None, presets_written, view_written });

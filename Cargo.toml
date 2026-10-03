@@ -25,6 +25,7 @@ lightcraft-gpu = { path = "crates/gpu" }
 lightcraft-catalog = { path = "crates/catalog" }
 lightcraft-preview = { path = "crates/preview" }
 lightcraft-merge = { path = "crates/merge" }
+lightcraft-segment = { path = "crates/segment" }
 lightcraft-engine = { path = "crates/engine" }
 lightcraft-ui-egui = { path = "crates/ui-egui" }
 lightcraft-mcp = { path = "crates/mcp" }
@@ -59,6 +60,11 @@ image-webp = "0.2"
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
 ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
+
+# AI segmentation (crates/segment): pure-Rust inference, CPU only (no MKL/Accelerate/CUDA features)
+candle-core = { version = "0.9", default-features = false }
+candle-nn = { version = "0.9", default-features = false }
+candle-transformers = { version = "0.9", default-features = false }
 
 # gpu (crates/gpu; native backends only, no GL: everything stays pure Rust)
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "vulkan", "dx12", "wgsl"] }

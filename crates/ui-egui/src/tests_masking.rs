@@ -328,3 +328,84 @@ fn mask_list_rename_hide_and_overlay_colour() {
     let i = all.iter().position(|c| *c == before).unwrap();
     assert_eq!(h.app.ui.mask_overlay_color, all[(i + 1) % all.len()]);
 }
+
+/// An Object prompt: (clicks on the object, box, clicks off it).
+type ObjectPrompt = (Vec<(f64, f64)>, Option<[f64; 4]>, Vec<(f64, f64)>);
+
+/// The Object prompt of mask `i`'s component `c`.
+fn object(h: &Headless, i: usize, c: usize) -> ObjectPrompt {
+    match &develop(h).masks[i].components[c].shape {
+        MaskShape::Object { hint, bbox, exclude } => (hint.iter().map(|p| (p.x, p.y)).collect(), *bbox, exclude.iter().map(|p| (p.x, p.y)).collect()),
+        other => panic!("not an object: {other:?}"),
+    }
+}
+
+fn near(a: (f64, f64), b: (f64, f64)) -> bool {
+    (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01
+}
+
+#[test]
+fn object_tool_boxes_clicks_and_refines() {
+    let mut h = detail("panel.masking");
+    // without the model Select Object is unavailable (it has no classical fallback)
+    assert!(!crate::menus::ui_enabled(&h.app, "tool.object"));
+    let r = h.request("engine.execute", json!({"command": "tool.object"}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    h.request("ui.clickWidget", json!({"id": "maskNew:object"}), T);
+    assert_ne!(h.app.ui.tool, "object");
+    assert!(develop(&h).masks.is_empty());
+
+    // with it (any file will do here: these gestures only record the prompt)
+    let models = std::env::temp_dir().join(format!("lc-ui-object-{}", std::process::id()));
+    std::fs::create_dir_all(&models).unwrap();
+    std::fs::write(models.join("object.safetensors"), b"stand-in").unwrap();
+    h.app.session.set_models(Some(models.clone()));
+    assert!(crate::menus::ui_enabled(&h.app, "tool.object"));
+    let r = h.request("ui.clickWidget", json!({"id": "maskNew:object"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(h.app.ui.tool, "object");
+
+    // drag a box (corners in any order)
+    pointer(&mut h, json!([{"kind": "down", "x": 0.6, "y": 0.7}, {"kind": "drag", "x": 0.4, "y": 0.5}, {"kind": "up", "x": 0.2, "y": 0.3}]));
+    assert_eq!(develop(&h).masks.len(), 1);
+    let (hint, bbox, exclude) = object(&h, 0, 0);
+    let b = bbox.expect("a box");
+    assert!(hint.is_empty() && exclude.is_empty());
+    assert!(near((b[0], b[1]), (0.2, 0.3)) && near((b[2], b[3]), (0.6, 0.7)), "{b:?}");
+
+    // Shift+click adds a point on the object, Alt+click one off it, to the selected mask
+    let r =
+        h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.45, "y": 0.5}, {"kind": "up", "x": 0.45, "y": 0.5}], "shift": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r =
+        h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.25, "y": 0.35}, {"kind": "up", "x": 0.25, "y": 0.35}], "alt": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(develop(&h).masks.len(), 1, "refining doesn't add masks");
+    let (hint, bbox, exclude) = object(&h, 0, 0);
+    assert_eq!(bbox, Some(b), "the box stays");
+    assert!(hint.len() == 1 && near(hint[0], (0.45, 0.5)), "{hint:?}");
+    assert!(exclude.len() == 1 && near(exclude[0], (0.25, 0.35)), "{exclude:?}");
+
+    // a plain click starts a new Object mask from that point
+    pointer(&mut h, json!([{"kind": "down", "x": 0.7, "y": 0.4}, {"kind": "up", "x": 0.7, "y": 0.4}]));
+    assert_eq!(develop(&h).masks.len(), 2);
+    let (hint, bbox, _) = object(&h, 1, 0);
+    assert!(bbox.is_none() && hint.len() == 1 && near(hint[0], (0.7, 0.4)), "{hint:?}");
+
+    // the component menu's Subtract > Object: the next box subtracts from the selected mask
+    exec(&mut h, "tool.object", json!({"op": "subtract"}));
+    pointer(&mut h, json!([{"kind": "down", "x": 0.65, "y": 0.35}, {"kind": "drag", "x": 0.7, "y": 0.4}, {"kind": "up", "x": 0.75, "y": 0.45}]));
+    let d = develop(&h);
+    assert_eq!(d.masks.len(), 2, "no new mask");
+    assert_eq!(d.masks[1].components.len(), 2);
+    assert_eq!(d.masks[1].components[1].op, lightcraft_develop::MaskOp::Subtract);
+    assert!(h.app.ui.object_op.is_none(), "the op applies once");
+    // a bad op is refused
+    let r = h.request("engine.execute", json!({"command": "tool.object", "params": {"op": "multiply"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+
+    // the photo still renders with the stand-in model (the masks fall back to their boxes)
+    assert!(h.settle(SETTLE), "renders finish");
+    assert!(!h.app.session.media.segmenter.as_ref().unwrap().busy());
+    let _ = std::fs::remove_dir_all(&models);
+}

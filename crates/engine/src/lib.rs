@@ -24,6 +24,7 @@ pub mod merge;
 pub mod preset_import;
 pub mod presets;
 pub mod rename;
+pub mod segment;
 pub mod sidecar;
 mod view;
 
