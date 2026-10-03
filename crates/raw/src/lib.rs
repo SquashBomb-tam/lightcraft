@@ -16,10 +16,12 @@
 //! [`embedded_preview`] covers all of them plus CR3. Variants we can't decode yet (Nikon Huffman NEF, Panasonic
 //! quantised RW2, compressed ORF/RAF, CR3) return [`RawError::Unsupported`]; each vendor module documents its sources
 //! (public specifications, tag-name documentation, black-box analysis of CC0 samples) and gaps. Non-DNG files carry no
-//! colour matrix: [`color`] falls back to a documented neutral model. The decoders never panic on malformed input.
+//! colour matrix: [`calibration`] supplies our own for the cameras we have calibrated, and [`color`] falls back to a
+//! documented neutral model for the rest. The decoders never panic on malformed input.
 #![forbid(unsafe_code)]
 
 mod binned;
+pub mod calibration;
 pub mod color;
 pub mod demosaic;
 mod dng;
@@ -173,7 +175,7 @@ pub(crate) enum Mode {
 }
 
 fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
-    match probe(bytes).ok_or(RawError::NotRaw)? {
+    let mut img = match probe(bytes).ok_or(RawError::NotRaw)? {
         RawFormat::Dng => dng::decode(bytes, mode),
         RawFormat::Cr2 => vendor::cr2::decode(bytes, mode),
         RawFormat::Nef | RawFormat::Nrw => vendor::nef::decode(bytes),
@@ -183,7 +185,9 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         RawFormat::Pef => vendor::pef::decode(bytes, mode),
         RawFormat::Orf => vendor::orf::decode(bytes),
         other => Err(RawError::Unsupported(format!("{other:?} files are not decoded yet"))),
-    }
+    }?;
+    calibration::apply(&mut img);
+    Ok(img)
 }
 
 /// A raw file's description without its samples (see [`probe_info`]).
