@@ -221,8 +221,9 @@ jobs:
       - name: Install wasm-bindgen CLI
         run: |
           # Must match the wasm-bindgen version in Cargo.lock exactly (cargo xtask web checks it).
-          command -v wasm-bindgen >/dev/null && wasm-bindgen --version | grep -q "$WASM_BINDGEN_VERSION" \
-            || cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+          if ! { command -v wasm-bindgen >/dev/null && wasm-bindgen --version | grep -q "$WASM_BINDGEN_VERSION"; }; then
+            cargo install wasm-bindgen-cli --version "$WASM_BINDGEN_VERSION" --locked
+          fi
           wasm-bindgen --version
       - name: Apply version override
         if: inputs.version != ''
