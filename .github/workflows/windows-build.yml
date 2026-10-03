@@ -1,0 +1,113 @@
+# Windows build for this fork. Builds LightCraft for 64-bit Windows with the project's own packaging
+# script (packaging/windows/package.ps1: MSI installer + portable zip, static C runtime), runs the test
+# suite on Windows and smoke-tests the packaged app. Every push to main publishes the result as the
+# "latest-windows" pre-release; pull requests only build and test.
+#
+# No signing certificate is configured, so the files are unsigned and Windows SmartScreen warns on first run.
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+    paths: ["apps/**", "crates/**", "assets/**", "xtask/**", "packaging/windows/**", "Cargo.toml", "Cargo.lock", ".cargo/**", ".github/workflows/windows-build.yml"]
+  pull_request:
+    paths: ["apps/**", "crates/**", "assets/**", "xtask/**", "packaging/windows/**", "Cargo.toml", "Cargo.lock", ".cargo/**", ".github/workflows/windows-build.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    name: Tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-test
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+  package:
+    name: Package (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-package
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: Build the MSI installer and the portable zip
+        shell: pwsh
+        run: ./packaging/windows/package.ps1 -Arch x64
+      - name: Smoke test the portable app (headless screenshot of the demo library)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-Item dist/release/*-portable.zip
+          $dir = Join-Path $env:RUNNER_TEMP 'portable'
+          Expand-Archive -Path $zip.FullName -DestinationPath $dir
+          $cli = Get-ChildItem -Path $dir -Recurse -Filter lightcraft-cli.exe | Select-Object -First 1
+          if (-not $cli) { throw 'lightcraft-cli.exe missing from the portable zip' }
+          if (-not (Get-ChildItem -Path $dir -Recurse -Filter lightcraft.exe)) { throw 'lightcraft.exe missing from the portable zip' }
+          $png = Join-Path $env:RUNNER_TEMP 'smoke.png'
+          & $cli.FullName snapshot --demo -o $png --size 1280x800
+          if ($LASTEXITCODE -ne 0) { throw "snapshot failed with exit code $LASTEXITCODE" }
+          $size = (Get-Item $png).Length
+          if ($size -lt 50000) { throw "snapshot is suspiciously small ($size bytes)" }
+          Write-Output "smoke test passed: $size-byte screenshot"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lightcraft-windows-x64
+          path: dist/release/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish the latest-windows pre-release
+    needs: [test, package]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: latest-windows
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: lightcraft-windows-x64
+          path: artifacts
+      - name: Checksums
+        working-directory: artifacts
+        run: sha256sum -- * | tee SHA256SUMS.txt
+      - name: Replace the pre-release
+        working-directory: artifacts
+        run: |
+          notes="Automatic build of commit ${GITHUB_SHA::9} for 64-bit Windows.
+
+          - **lightcraft-…-windows-x64.msi**: installer (adds LightCraft to the Start menu).
+          - **lightcraft-…-windows-x64-portable.zip**: no installation; unzip anywhere and run lightcraft.exe.
+
+          The files are not code-signed, so Windows SmartScreen shows a warning on first run: click More info, then Run anyway."
+          gh release delete "$TAG" --cleanup-tag --yes || true
+          gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+            --title "LightCraft for Windows (latest build)" --notes "$notes" -- *
