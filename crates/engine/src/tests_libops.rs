@@ -272,8 +272,8 @@ fn import_review_preview_and_options() {
     std::fs::copy(src.join("a.png"), src.join("sub/a-again.png")).unwrap();
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
-    // c.png is already in the library
-    s.execute("library.import", &json!({"paths": [src.join("sub/c.png").to_string_lossy()]})).unwrap();
+    // c.png is already in the library (spelled with native separators, as the folder scan finds it)
+    s.execute("library.import", &json!({"paths": [src.join("sub").join("c.png").to_string_lossy()]})).unwrap();
     let n0 = s.catalog.len();
     let undo0 = s.undo.len();
     let pv = s.execute("library.importPreview", &json!({"paths": [src.to_string_lossy()]})).unwrap();
