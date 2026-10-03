@@ -31,7 +31,7 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | H. Crop & rotate (CROP) | 9 | 0 | 0 | 1 | 6/6 (100%) | 3/3 (100%) |
 | I. Remove / healing (REM) | 6 | 1 | 3 | 2 | 4/4 (100%) | 2/3 (67%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
-| K. Masking (MASK) | 11 | 5 | 7 | 0 | 8/8 (100%) | 3/5 (60%) |
+| K. Masking (MASK) | 15 | 2 | 6 | 0 | 8/8 (100%) | 3/5 (60%) |
 | L. Presets (PRE) | 5 | 1 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 4 | 0 | 1 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 4 | 1 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
@@ -46,11 +46,11 @@ and prints the summary; `cargo xtask parity --write` refreshes the summary table
 | W. Cloud & AI infrastructure (CLOUD / AI) | 0 | 1 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 13 | 0 | 4 | 1 | 8/8 (100%) | 5/5 (100%) |
 | Y. Menus | 70 | 7 | 8 | 8 | 46/47 (98%) | 19/23 (83%) |
-| Z. Keyboard shortcuts (desktop) | 66 | 9 | 5 | 1 | 49/52 (94%) | 15/23 (65%) |
+| Z. Keyboard shortcuts (desktop) | 67 | 9 | 4 | 1 | 49/52 (94%) | 15/23 (65%) |
 | Lightroom Classic extras | 12 | 17 | 50 | 9 | — | 11/21 (52%) |
-| **Total** | 325 | 49 | 126 | 37 | 193/198 (97%) | 112/144 (78%) |
+| **Total** | 330 | 46 | 124 | 37 | 193/198 (97%) | 112/144 (78%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **69.9%** of 500 in-scope rows — P0 98.7% of 198 · P1 86.8% of 144 · P2 18.4% of 158.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **70.6%** of 500 in-scope rows — P0 98.7% of 198 · P1 86.8% of 144 · P2 20.6% of 158.
 <!-- /parity:summary -->
 
 ## Top gaps
@@ -89,7 +89,7 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 **Still missing / broken:**
 - No command yet: F1 help, ⇧6–9 label + advance (verify the rest of the old list: full screen, settings, stacks,
   visualize spots and merges have commands now).
-- `H` opens Remove; Lightroom also uses it (Classic) to hide pins — pins toggle from View → Show Mask Pins.
+- `H` hides the masks (overlay, pins, outlines) while masking, like Lightroom Classic, and opens Remove elsewhere.
 - ⌘M / ⌘H / ⌘Q / ⌘W rely on the platform window defaults (unverified).
 
 <!-- Sections below hold one row per id. Keep the column order: Id | Feature | Tier | Status | Evidence | Notes. -->
@@ -309,15 +309,15 @@ under the UI command that wraps it (a no-op error); the UI command now wins.
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-MASK-PANEL | Masks panel | P0 | ✅ | `cmd:panel.masking`, `cmd:mask.add`, `cmd:mask.select`, `cmd:mask.rename`, `cmd:mask.duplicate` (`invert`), `cmd:mask.move`, `cmd:mask.visible`, `cmd:mask.delete`, `crates/ui-egui/src/panels/masking.rs` | list with per-mask show/hide eye, double-click rename, right-click menu (duplicate, duplicate and invert, invert, hide, move up/down, rename, delete); no drag-to-reorder |
-| LR-MASK-SUBJECT | Select subject | P2 | 🟡 | `cmd:mask.add` (`subject`), `crates/pipeline/src/masks.rs` | saliency heuristic, no segmentation model |
-| LR-MASK-SKY | Select sky | P2 | 🟡 | `cmd:mask.add` (`sky`) | heuristic |
-| LR-MASK-BACKGROUND | Select background | P2 | 🟡 | `cmd:mask.add` (`background`) | inverse of the subject heuristic |
-| LR-MASK-OBJECTS | Object selection | P2 | ⬜ | | shape exists (falls back to the subject heuristic); no UI |
+| LR-MASK-SUBJECT | Select subject | P2 | ✅ | `cmd:mask.add` (`subject`), `crates/segment/src/native/u2net.rs`, `crates/engine/src/segment.rs` | U²-Net segmentation, refined to the photo's edges; a classical saliency estimate when the models aren't installed (browser build) |
+| LR-MASK-SKY | Select sky | P2 | ✅ | `cmd:mask.add` (`sky`), `crates/segment/src/native/u2net.rs` | U²-Net sky segmentation; classical estimate without the models |
+| LR-MASK-BACKGROUND | Select background | P2 | ✅ | `cmd:mask.add` (`background`) | inverse of the subject segmentation |
+| LR-MASK-OBJECTS | Object selection | P2 | ✅ | `cmd:tool.object`, `cmd:mask.add` (`object`), `cmd:mask.models`, `crates/segment/src/native/sam.rs`, `crates/ui-egui/src/panels/detail.rs` | MobileSAM: click or drag a box on the photo, Shift/Alt+click refine; unavailable without the models (an imported Object mask then uses its box); no brush-style object selection |
 | LR-MASK-PEOPLE | People parts | P2 | ⬜ | | |
 | LR-MASK-LANDSCAPE | Landscape classes | P2 | ⬜ | | shape exists, evaluates empty |
 | LR-MASK-BRUSH | Brush mask | P0 | ✅ | `cmd:tool.brush`, `cmd:mask.brushStroke` (`autoMask`), `crates/pipeline/src/masks.rs` | size/feather/flow/density/erase; Auto Mask: dabs weighted by similarity to the colour under the dab centre, refined by a guided filter on luminance (CPU + GPU); no A/B brushes, no pressure |
 | LR-MASK-LINEAR | Linear gradient | P0 | ✅ | `cmd:tool.linear`, `cmd:mask.update` | |
-| LR-MASK-RADIAL | Radial gradient | P0 | ✅ | `cmd:tool.radial`, `cmd:mask.update` | |
+| LR-MASK-RADIAL | Radial gradient | P0 | ✅ | `cmd:tool.radial`, `cmd:mask.update`, `crates/ui-egui/src/panels/mask_handles.rs` | on the photo: four edge handles resize (⇧ keeps proportions), a knob above the top rotates (⇧ snaps to 15°), a diamond on the dashed inner ring sets Feather; Feather slider in the panel |
 | LR-MASK-COLORRANGE | Colour range | P1 | 🟡 | `cmd:mask.add` (`colorRange`) | renders; sampling UX unverified |
 | LR-MASK-LUMRANGE | Luminance range | P1 | 🟡 | `cmd:mask.add` (`luminanceRange`) | no luminance-map display |
 | LR-MASK-DEPTHRANGE | Depth range | P2 | ⬜ | | shape exists, needs depth data |
@@ -677,7 +677,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-ESC | Leave tool / view — Esc | P0 | ✅ | `cmd:view.back` | |
 | KEY-COMMIT | Commit tool — Return | P1 | ✅ | `cmd:tool.done` | Return closes Crop / Remove / Red Eye / Masking back to Edit (edits apply live, as in Lightroom) |
 | KEY-DELETE-PIN | Delete selected pin — ⌫ | P0 | ✅ | `cmd:mask.delete`, `cmd:spot.delete` | ⌫ deletes the active mask (Masking) or the selected spot (Remove), never the photo while retouching |
-| KEY-HIDEPINS | Hide pins — H | P2 | ⬜ | | H = Remove panel |
+| KEY-HIDEPINS | Hide pins — H | P2 | ✅ | `cmd:view.maskHide`, `crates/ui-egui/src/tests_masking.rs` | while masking H hides the overlay, pins, outlines and handles (edits still apply; leaving the panel or adding a mask shows them again); H opens Remove elsewhere |
 
 ## Lightroom Classic extras
 

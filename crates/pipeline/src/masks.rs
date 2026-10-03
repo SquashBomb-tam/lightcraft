@@ -9,6 +9,21 @@ use lightcraft_raster::{Plane, Rgb32f};
 
 use crate::for_rows;
 use crate::geometry::Frame;
+use crate::segmaps::{self, Segmentations};
+
+/// What mask shapes are evaluated against: the render's frame and size, its image and log
+/// luminance (both before exposure `ev`), and the photo's AI segmentations (Sky, Subject,
+/// Background, Object; empty → classical estimates).
+#[derive(Clone, Copy)]
+pub struct Inputs<'a> {
+    pub frame: &'a Frame,
+    pub w: usize,
+    pub h: usize,
+    pub img: &'a Rgb32f,
+    pub log_l: &'a Plane,
+    pub ev: f32,
+    pub seg: &'a Segmentations,
+}
 
 pub struct Evaluated {
     /// The mask's id ([`Mask::id`]).
@@ -24,21 +39,21 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 }
 
 /// The visible masks with components, evaluated in order.
-pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32) -> Vec<Evaluated> {
+pub fn evaluate(masks: &[Mask], x: &Inputs<'_>) -> Vec<Evaluated> {
     masks
         .iter()
         .filter(|m| m.visible && !m.components.is_empty())
-        .map(|m| Evaluated { id: m.id, alpha: evaluate_one(m, frame, w, h, img, log_l, ev), adjust: m.adjust })
+        .map(|m| Evaluated { id: m.id, alpha: evaluate_one(m, x), adjust: m.adjust })
         .collect()
 }
 
 /// The alpha plane of mask `m` (whether visible or not): its components combined, inverted and
 /// scaled by its amount.
-pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32) -> Plane {
-    let mut alpha = Plane::new(w, h);
+pub fn evaluate_one(m: &Mask, x: &Inputs<'_>) -> Plane {
+    let mut alpha = Plane::new(x.w, x.h);
     let mut first = true;
     for comp in &m.components {
-        let mut c = shape_alpha(&comp.shape, frame, w, h, img, log_l, ev);
+        let mut c = shape_alpha(&comp.shape, x);
         if comp.invert {
             c.data.iter_mut().for_each(|v| *v = 1.0 - *v);
         }
@@ -78,7 +93,22 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
     });
 }
 
-pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32) -> Plane {
+pub fn shape_alpha(shape: &MaskShape, x: &Inputs<'_>) -> Plane {
+    let Inputs { frame, w, h, img, log_l, ev, seg } = *x;
+    // AI masks: the model's segmentation when the engine computed one
+    let ai = match shape {
+        MaskShape::Sky => seg.sky.as_ref(),
+        MaskShape::Subject | MaskShape::Background => seg.subject.as_ref(),
+        MaskShape::Object { .. } => seg.object(shape),
+        _ => None,
+    };
+    if let Some(map) = ai {
+        let mut a = segmaps::alpha(map, frame, w, h, log_l);
+        if matches!(shape, MaskShape::Background) {
+            a.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+        }
+        return a;
+    }
     let mut out = Plane::new(w, h);
     let to_long = |p: Point| frame.norm_to_long(p);
     // `img`/`log_l` are before exposure: range masks select on the exposed values.
@@ -143,7 +173,19 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.01 * frame_px(frame, w));
         }
-        MaskShape::Subject | MaskShape::Object { .. } | MaskShape::People { .. } => {
+        MaskShape::Object { bbox, .. } => {
+            // without its segmentation (no model installed, or it failed) an Object mask is the
+            // box drawn around the object, softened a little; a click alone selects nothing
+            if let Some([x0, y0, x1, y1]) = *bbox {
+                let m = frame.out_to_norm(w, h);
+                for (i, v) in out.data.iter_mut().enumerate() {
+                    let n = m.apply(Point::new((i % w) as f64 + 0.5, (i / w) as f64 + 0.5));
+                    *v = if (x0..=x1).contains(&n.x) && (y0..=y1).contains(&n.y) { 1.0 } else { 0.0 };
+                }
+                smooth_plane(&mut out, 0.005 * frame_px(frame, w));
+            }
+        }
+        MaskShape::Subject | MaskShape::People { .. } => {
             // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
             let m = frame.out_to_norm(w, h);
             let blur = lightcraft_raster::blur::gaussian(log_l, 0.03 * frame_px(frame, w));
@@ -157,7 +199,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             smooth_plane(&mut out, 0.015 * frame_px(frame, w));
         }
         MaskShape::Background => {
-            let mut s = shape_alpha(&MaskShape::Subject, frame, w, h, img, log_l, ev);
+            let mut s = shape_alpha(&MaskShape::Subject, x);
             s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
             out = s;
         }
@@ -332,6 +374,10 @@ mod tests {
     use super::*;
     use lightcraft_develop::{DevelopSettings, MaskComponent};
 
+    fn inputs<'a>(frame: &'a Frame, w: usize, h: usize, img: &'a Rgb32f, log_l: &'a Plane) -> Inputs<'a> {
+        Inputs { frame, w, h, img, log_l, ev: 0.0, seg: Segmentations::none() }
+    }
+
     fn frame(w: usize, h: usize) -> Frame {
         Frame::new(w, h, &DevelopSettings::default(), true)
     }
@@ -341,9 +387,23 @@ mod tests {
         let f = frame(100, 50);
         let img = Rgb32f::new(100, 50);
         let l = Plane::new(100, 50);
-        let a = shape_alpha(&MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) }, &f, 100, 50, &img, &l, 0.0);
+        let a = shape_alpha(&MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) }, &inputs(&f, 100, 50, &img, &l));
         assert!(a.get(1, 25) > 0.99 && a.get(98, 25) < 0.01);
         assert!((a.get(50, 25) - 0.5).abs() < 0.05);
+    }
+
+    #[test]
+    fn object_without_its_segmentation_is_its_box() {
+        let f = frame(200, 100);
+        let img = Rgb32f::new(200, 100);
+        let l = Plane::new(200, 100);
+        let boxed = MaskShape::Object { hint: vec![], bbox: Some([0.25, 0.2, 0.75, 0.8]), exclude: vec![] };
+        let a = shape_alpha(&boxed, &inputs(&f, 200, 100, &img, &l));
+        assert!(a.get(100, 50) > 0.99, "inside the box");
+        assert!(a.get(10, 50) < 0.01 && a.get(190, 50) < 0.01 && a.get(100, 5) < 0.01 && a.get(100, 95) < 0.01, "outside it");
+        // a click alone gives nothing to go on: nothing is selected
+        let clicked = MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], bbox: None, exclude: vec![] };
+        assert!(shape_alpha(&clicked, &inputs(&f, 200, 100, &img, &l)).data.iter().all(|v| *v == 0.0));
     }
 
     #[test]
@@ -352,10 +412,10 @@ mod tests {
         let img = Rgb32f::new(100, 100);
         let l = Plane::new(100, 100);
         let shape = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 20.0, invert: false };
-        let a = shape_alpha(&shape, &f, 100, 100, &img, &l, 0.0);
+        let a = shape_alpha(&shape, &inputs(&f, 100, 100, &img, &l));
         assert!(a.get(50, 50) > 0.99 && a.get(5, 5) < 0.01);
         let m = Mask { components: vec![MaskComponent { op: MaskOp::Add, invert: true, shape }], ..Default::default() };
-        let e = evaluate(&[m], &f, 100, 100, &img, &l, 0.0);
+        let e = evaluate(&[m], &inputs(&f, 100, 100, &img, &l));
         assert!(e[0].alpha.get(50, 50) < 0.01);
     }
 
@@ -370,7 +430,7 @@ mod tests {
             components: vec![MaskComponent { op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke, erase] } }],
             ..Default::default()
         };
-        let e = evaluate(&[m], &f, 200, 100, &img, &l, 0.0);
+        let e = evaluate(&[m], &inputs(&f, 200, 100, &img, &l));
         let a = &e[0].alpha;
         assert!(a.get(40, 50) > 0.9, "{}", a.get(40, 50));
         assert!(a.get(100, 50) < 0.05, "erased centre {}", a.get(100, 50));
@@ -392,8 +452,8 @@ mod tests {
             ..Default::default()
         };
         let comp = |auto| MaskShape::Brush { strokes: vec![stroke(auto)] };
-        let plain = shape_alpha(&comp(false), &f, w, h, &img, &l, 0.0);
-        let auto = shape_alpha(&comp(true), &f, w, h, &img, &l, 0.0);
+        let plain = shape_alpha(&comp(false), &inputs(&f, w, h, &img, &l));
+        let auto = shape_alpha(&comp(true), &inputs(&f, w, h, &img, &l));
         // without Auto Mask the brush spills over the edge; with it, it stays on the dark side
         assert!(plain.get(105, 50) > 0.9, "{}", plain.get(105, 50));
         assert!(auto.get(105, 50) < 0.05, "spill {}", auto.get(105, 50));
@@ -403,8 +463,8 @@ mod tests {
         // on a flat area Auto Mask paints like the plain brush
         let flat = Rgb32f::from_fn(w, h, |_, _| [0.2; 3]);
         let fl = flat.map(crate::local::log_lum);
-        let a = shape_alpha(&comp(true), &f, w, h, &flat, &fl, 0.0);
-        let b = shape_alpha(&comp(false), &f, w, h, &flat, &fl, 0.0);
+        let a = shape_alpha(&comp(true), &inputs(&f, w, h, &flat, &fl));
+        let b = shape_alpha(&comp(false), &inputs(&f, w, h, &flat, &fl));
         assert!((a.get(94, 50) - b.get(94, 50)).abs() < 0.02, "{} vs {}", a.get(94, 50), b.get(94, 50));
     }
 }

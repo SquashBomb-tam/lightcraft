@@ -1,6 +1,7 @@
 # Windows build for this fork. Builds LightCraft for 64-bit Windows with the project's own packaging
-# script (packaging/windows/package.ps1: MSI installer + portable zip, static C runtime), runs the test
-# suite on Windows and smoke-tests the packaged app. Every push to main publishes the result as the
+# script (packaging/windows/package.ps1: MSI installer + portable zip, static C runtime, the AI mask
+# models), runs the test suite on Windows (including the tests that need the real models) and
+# smoke-tests the packaged app. Every push to main publishes the result as the
 # "latest-windows" pre-release; pull requests only build and test.
 #
 # No signing certificate is configured, so the files are unsigned and Windows SmartScreen warns on first run.
@@ -39,9 +40,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows-test
+      - uses: actions/cache@v4
+        with:
+          path: models/download
+          key: ai-models-${{ hashFiles('xtask/src/models.rs') }}
+      - name: AI mask models (download, check SHA-256, convert)
+        run: cargo xtask models --download
       - name: cargo test
         # every test target runs, so one failure doesn't hide the others
         run: cargo test --workspace --locked --no-fail-fast
+      - name: AI mask tests with the real models
+        # the tests marked #[ignore] are exactly the ones that need the models
+        run: cargo test --locked --no-fail-fast -p lightcraft-segment -p lightcraft-engine -- --ignored
 
   package:
     name: Package (Windows x64)
@@ -59,6 +69,12 @@ jobs:
       - name: Install WiX
         shell: pwsh
         run: dotnet tool install --global wix --version 5.0.2
+      - uses: actions/cache@v4
+        with:
+          path: models/download
+          key: ai-models-${{ hashFiles('xtask/src/models.rs') }}
+      - name: AI mask models (download, check SHA-256, convert)
+        run: cargo xtask models --download
       - name: Build the MSI installer and the portable zip
         shell: pwsh
         run: ./packaging/windows/package.ps1 -Arch x64
@@ -78,6 +94,30 @@ jobs:
           $size = (Get-Item $png).Length
           if ($size -lt 50000) { throw "snapshot is suspiciously small ($size bytes)" }
           Write-Output "smoke test passed: $size-byte screenshot"
+      - name: Smoke test the AI mask models (portable zip and MSI)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Test-Models([string] $Dir, [string] $What) {
+            foreach ($f in 'object', 'subject', 'sky') {
+              if (-not (Test-Path (Join-Path $Dir "models\$f.safetensors"))) { throw "$What has no models\$f.safetensors" }
+            }
+            $out = & (Join-Path $Dir 'lightcraft-cli.exe') run --demo mask.models
+            if ($LASTEXITCODE -ne 0) { throw "${What}: mask.models failed with exit code $LASTEXITCODE" }
+            $r = ($out | Select-Object -Last 1 | ConvertFrom-Json).result
+            if (-not ($r.object -and $r.subject -and $r.sky)) { throw "${What}: the app doesn't find its models: $out" }
+            Write-Output "${What}: models found in $($r.dir)"
+          }
+          $cli = Get-ChildItem -Path (Join-Path $env:RUNNER_TEMP 'portable') -Recurse -Filter lightcraft-cli.exe | Select-Object -First 1
+          Test-Models $cli.DirectoryName 'portable zip'
+          # an administrative install unpacks the MSI's files without installing it
+          $msi = Get-Item dist/release/*.msi
+          $x = Join-Path $env:RUNNER_TEMP 'msi'
+          $p = Start-Process msiexec -ArgumentList '/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$x`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /a failed with exit code $($p.ExitCode)" }
+          $installed = Get-ChildItem -Path $x -Recurse -Filter lightcraft-cli.exe | Select-Object -First 1
+          if (-not $installed) { throw 'lightcraft-cli.exe missing from the MSI' }
+          Test-Models $installed.DirectoryName 'MSI'
       - uses: actions/upload-artifact@v4
         with:
           name: lightcraft-windows-x64

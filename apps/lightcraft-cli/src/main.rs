@@ -187,6 +187,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 None if demo => Headless::demo(),
                 None => Headless::default(),
             };
+            h.session.use_installed_models();
             if !files.is_empty() {
                 let paths = expand_paths(&files);
                 let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
@@ -419,6 +420,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 None if demo => Headless::demo(),
                 None => Headless::default(),
             };
+            h.session.use_installed_models();
             if !imports.is_empty() {
                 let paths = expand_paths(&imports);
                 let r = h.session.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
@@ -497,7 +499,7 @@ fn render(args: &[String]) -> Result<(), String> {
     }
     let input = input.ok_or("render: missing input file")?;
     let output = output.ok_or("render: missing -o OUTPUT")?;
-    let mut s = Session::new().with_fs();
+    let mut s = Session::new().with_fs().with_installed_models();
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;
@@ -579,7 +581,8 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         }
         None if files.is_empty() => Session::with_demo().with_fs(),
         None => Session::new().with_fs(),
-    };
+    }
+    .with_installed_models();
     if !files.is_empty() {
         let ti = Instant::now();
         let r = session.execute("library.import", &json!({"paths": expand_paths(&files)})).map_err(|e| e.to_string())?;

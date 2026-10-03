@@ -111,6 +111,9 @@ pub struct MediaCache {
     scenes: Vec<lightcraft_scenes::Scene>,
     /// Rendered thumbnails (memory, plus disk once a library is attached).
     pub rendered: Arc<PreviewCache>,
+    /// The AI segmentation models and their results, when the app installed models
+    /// ([`crate::Session::with_models`]).
+    pub segmenter: Option<Arc<crate::segment::SegService>>,
 }
 
 impl Default for MediaCache {
@@ -128,6 +131,7 @@ impl Default for MediaCache {
             file_bytes: None,
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
+            segmenter: None,
         }
     }
 }
@@ -308,6 +312,9 @@ pub struct RenderJob {
     pub stages: Option<Arc<StageCache>>,
     /// Keep a full-quality result here as the photo's view preview ([`crate::Session::loupe_job`]).
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
+    /// The photo's AI segmentations, for settings with Sky / Subject / Background / Object masks
+    /// (computed on the worker when missing; see [`crate::segment`]).
+    pub seg: Option<crate::segment::SegJob>,
 }
 
 pub struct RenderResult {
@@ -373,7 +380,8 @@ impl RenderJob {
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
-                let rendered = develop(&src, &self.info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                let seg = self.seg.as_ref().map(|j| j.resolve(&src, &self.info, &self.settings)).unwrap_or_default();
+                let rendered = develop_with(&src, &self.info, &self.settings, &self.request, self.stages.as_deref(), gpu, &seg);
                 if let Some((cache, key)) = &self.cache {
                     cache.put(*key, Arc::new(rendered.image.clone()));
                 }
@@ -400,12 +408,25 @@ impl RenderJob {
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
 /// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`lightcraft_gpu::set_enabled`] forces the CPU.
 pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
-    if gpu && let Some(r) = lightcraft_gpu::render(src, info, s, req, stages) {
+    develop_with(src, info, s, req, stages, gpu, lightcraft_pipeline::Segmentations::none())
+}
+
+/// [`develop`] with the photo's AI segmentations (for its Sky / Subject / Background / Object masks).
+pub fn develop_with(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    gpu: bool,
+    seg: &lightcraft_pipeline::Segmentations,
+) -> Rendered {
+    if gpu && let Some(r) = lightcraft_gpu::render_with(src, info, s, req, stages, seg) {
         return r;
     }
     match stages {
-        Some(st) => lightcraft_pipeline::render_cached(src, info, s, req, st),
-        None => lightcraft_pipeline::render(src, info, s, req),
+        Some(st) => lightcraft_pipeline::render_cached_with(src, info, s, req, st, seg),
+        None => lightcraft_pipeline::render_with(src, info, s, req, seg),
     }
 }
 
@@ -459,6 +480,12 @@ impl QuickJob {
         }
         done(Err("no quick preview".into()), None)
     }
+}
+
+/// The installed models' version when `seg` is set (part of render cache keys: a render with
+/// AI masks depends on the models), else 0.
+fn seg_revision(seg: &Option<crate::segment::SegJob>) -> u64 {
+    seg.as_ref().map_or(0, |j| j.service.segmenter().revision().max(1))
 }
 
 /// What identifies a photo's pixels for caching: its content hash, else its source.
@@ -517,9 +544,16 @@ impl crate::Session {
             ^ (apply_crop as u64)
             ^ (level as u64) << 60
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        let seg = self.seg_job(&p, &settings);
+        let rev = seg_revision(&seg);
+        let key = key ^ rev;
         let cache = thumb_bucket.map(|b| {
-            let k = Hasher128::new().str(&content_key(&p)).u64(settings.hash64()).u64(b as u64).u64(RENDER_CACHE_VERSION).finish();
-            (self.media.rendered.clone(), k)
+            let mut k = Hasher128::new();
+            k.str(&content_key(&p)).u64(settings.hash64()).u64(b as u64).u64(RENDER_CACHE_VERSION);
+            if rev != 0 {
+                k.u64(rev);
+            }
+            (self.media.rendered.clone(), k.finish())
         });
         Some(RenderJob {
             photo: id,
@@ -533,6 +567,7 @@ impl crate::Session {
             cache,
             stages: None,
             view_cache: None,
+            seg,
         })
     }
 
@@ -550,6 +585,13 @@ impl crate::Session {
         Hasher128::new().str(&content_key(p)).str("variant").u64(settings.hash64()).u64(edge as u64).u64(RENDER_CACHE_VERSION).finish()
     }
 
+    /// The segmentations a render of `p` with `settings` needs, when it has AI masks and models
+    /// are installed.
+    pub(crate) fn seg_job(&self, p: &Photo, settings: &DevelopSettings) -> Option<crate::segment::SegJob> {
+        let svc = self.media.segmenter.as_ref()?;
+        svc.needed(settings).then(|| crate::segment::SegJob { service: svc.clone(), content: content_key(p) })
+    }
+
     /// A thumbnail of `id` rendered with `settings` instead of its own (profile and preset
     /// browsers): from the thumbnail-level source, long edge `edge` (≤ 512), cropped. The result
     /// is cached (memory + the library's disk cache) under the photo's content and the settings
@@ -560,7 +602,9 @@ impl crate::Session {
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
         let source = self.media.source_ref(&p, level);
-        let ck = Self::variant_key(&p, settings, edge);
+        let seg = self.seg_job(&p, settings);
+        let mut ck = Self::variant_key(&p, settings, edge);
+        ck.0 ^= seg_revision(&seg) as u128;
         Some(RenderJob {
             photo: id,
             level,
@@ -573,12 +617,18 @@ impl crate::Session {
             cache: Some((self.media.rendered.clone(), ck)),
             stages: None,
             view_cache: None,
+            seg,
         })
     }
 
     /// Size-independent cache key of a photo's view render (loupe) for its current settings.
-    fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-        Hasher128::new().str(&content_key(p)).str("view").u64(p.develop.hash64()).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION).finish()
+    fn view_key(p: &Photo, apply_crop: bool, seg_rev: u64) -> Hash128 {
+        let mut h = Hasher128::new();
+        h.str(&content_key(p)).str("view").u64(p.develop.hash64()).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION);
+        if seg_rev != 0 {
+            h.u64(seg_rev);
+        }
+        h.finish()
     }
 
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the
@@ -586,7 +636,7 @@ impl crate::Session {
     pub fn loupe_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         let p = self.catalog.photo(id)?;
-        job.view_cache = Some((self.media.rendered.clone(), Self::view_key(p, apply_crop)));
+        job.view_cache = Some((self.media.rendered.clone(), Self::view_key(p, apply_crop, seg_revision(&job.seg))));
         Some(job)
     }
 
@@ -604,7 +654,8 @@ impl crate::Session {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
-        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
+        let rev = seg_revision(&self.seg_job(&p, &p.develop));
+        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop, rev))];
         let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
         let key = h.0 as u64;
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));

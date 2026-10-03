@@ -182,6 +182,18 @@ pub fn stage_bytes(stages: &StageCache) -> usize {
 /// Render `src` with `s` on the GPU, reusing the device-resident stages kept with `stages` (the
 /// view's CPU stage cache). `None`: render on the CPU instead.
 pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Rendered> {
+    render_with(src, info, s, req, stages, &lightcraft_pipeline::Segmentations::NONE)
+}
+
+/// [`render`] with the photo's AI segmentations for its Sky / Subject / Background / Object masks.
+pub fn render_with(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    seg: &lightcraft_pipeline::Segmentations,
+) -> Option<Rendered> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // the kernel writes 8-bit output: high-bit-depth exports render on the CPU
@@ -192,7 +204,7 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
         let ext = stages.map(|c| c.extension::<GpuStages>());
         let r = {
             let _scope = ctx::RenderScope::new(gpu);
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref())))
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), seg)))
         };
         match r {
             // a device error during the render: its result is not trustworthy
@@ -207,7 +219,7 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = (src, info, s, req, stages);
+        let _ = (src, info, s, req, stages, seg);
         None
     }
 }

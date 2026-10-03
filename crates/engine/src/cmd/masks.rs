@@ -4,7 +4,7 @@ use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskComponent, Mas
 use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
-use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
+use super::{CommandSpec, always, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
 use crate::{Result, Session};
 
 fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
@@ -21,6 +21,7 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             feather: f64_or(p, "feather", 50.0),
             invert: bool_or(p, "invert", false),
         },
+        "object" => object_shape(p, c)?,
         "sky" => MaskShape::Sky,
         "subject" => MaskShape::Subject,
         "background" => MaskShape::Background,
@@ -38,8 +39,47 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
                 .unwrap_or_default();
             MaskShape::ColorRange { samples, refine: f64_or(p, "refine", 50.0) }
         }
-        other => return Err(bad(c, format!("unknown mask kind `{other}` (brush|linear|radial|sky|subject|background|luminanceRange|colorRange)"))),
+        other => {
+            return Err(bad(c, format!("unknown mask kind `{other}` (brush|linear|radial|object|sky|subject|background|luminanceRange|colorRange)")));
+        }
     })
+}
+
+/// An Object mask from `points` on the object, `exclude` points off it and/or a `box` around it
+/// (`[x0, y0, x1, y1]`), all normalized photo coordinates.
+fn object_shape(p: &Value, c: &str) -> Result<MaskShape> {
+    let on_photo = |x: f64, y: f64| x.is_finite() && y.is_finite() && (-0.01..=1.01).contains(&x) && (-0.01..=1.01).contains(&y);
+    let points = |key: &str| -> Result<Vec<Point>> {
+        let Some(v) = p.get(key) else { return Ok(Vec::new()) };
+        let arr = v.as_array().ok_or_else(|| bad(c, format!("`{key}` is a list of [x, y] points")))?;
+        arr.iter()
+            .map(|q| match (q.get(0).and_then(Value::as_f64), q.get(1).and_then(Value::as_f64)) {
+                (Some(x), Some(y)) if on_photo(x, y) => Ok(Point::new(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0))),
+                _ => Err(bad(c, format!("`{key}`: {q} is not an [x, y] point on the photo (0..1)"))),
+            })
+            .collect()
+    };
+    let hint = points("points")?;
+    let exclude = points("exclude")?;
+    let bbox = match p.get("box") {
+        None | Some(Value::Null) => None,
+        Some(b) => {
+            let v: Vec<f64> = b.as_array().map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+            let [x0, y0, x1, y1] = v[..] else { return Err(bad(c, "`box` is [x0, y0, x1, y1]")) };
+            if !on_photo(x0, y0) || !on_photo(x1, y1) {
+                return Err(bad(c, "`box` must lie on the photo (0..1)"));
+            }
+            let (x0, x1, y0, y1) = (x0.min(x1).max(0.0), x0.max(x1).min(1.0), y0.min(y1).max(0.0), y0.max(y1).min(1.0));
+            if x1 - x0 < 0.002 || y1 - y0 < 0.002 {
+                return Err(bad(c, "`box` is too small to select anything"));
+            }
+            Some([x0, y0, x1, y1])
+        }
+    };
+    if hint.is_empty() && bbox.is_none() {
+        return Err(bad(c, "an object mask needs `points` on the object or a `box` around it"));
+    }
+    Ok(MaskShape::Object { hint, bbox, exclude })
 }
 
 fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mask>, &mut Option<u32>) -> Result<()>) -> Result<Value> {
@@ -67,7 +107,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…), name?}",
+            "{kind: brush|linear|radial|object|sky|subject|background|luminanceRange|colorRange, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y]…], box [x0,y0,x1,y1]), name?}",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
@@ -155,9 +195,36 @@ pub fn specs() -> Vec<CommandSpec> {
                 })
             }
         ),
+        cmd!(
+            "mask.models",
+            "AI Mask Models",
+            [],
+            None,
+            "{} — which AI models are installed: {dir, sky, subject, object, busy} (without them Sky/Subject/Background use classical estimates and Select Object is unavailable)",
+            always,
+            |s, _p| {
+                let svc = s.media.segmenter.as_ref();
+                let has = |k| svc.is_some_and(|v| v.segmenter().has(k));
+                Ok(json!({
+                    "dir": svc.map(|v| v.segmenter().dir().display().to_string()),
+                    "sky": has(lightcraft_segment::Kind::Sky),
+                    "subject": has(lightcraft_segment::Kind::Subject),
+                    "object": svc.is_some_and(|v| v.segmenter().has_objects()),
+                    "busy": svc.is_some_and(|v| v.busy()),
+                }))
+            }
+        ),
         cmd!("mask.update", "Update Mask Shape", [], None, "{id?, component?: index (0), shape: MaskShape JSON}", has_active, |s, p| {
             let shape: MaskShape =
                 serde_json::from_value(p.get("shape").cloned().unwrap_or_default()).map_err(|e| bad("mask.update", e.to_string()))?;
+            // an Object prompt gets the same checks as when it was added
+            let shape = match shape {
+                MaskShape::Object { hint, bbox, exclude } => {
+                    let pts = |v: &[Point]| v.iter().map(|q| json!([q.x, q.y])).collect::<Vec<_>>();
+                    object_shape(&json!({"points": pts(&hint), "exclude": pts(&exclude), "box": bbox}), "mask.update")?
+                }
+                other => other,
+            };
             let comp = p.get("component").and_then(Value::as_u64).unwrap_or(0) as usize;
             let mid = mask_id(p, s.active_mask, "mask.update")?;
             masks_edit(s, "mask.update", "Edit Mask", |masks, _| {

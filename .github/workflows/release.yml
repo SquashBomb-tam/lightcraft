@@ -130,6 +130,13 @@ jobs:
       - name: Install WiX
         shell: pwsh
         run: dotnet tool install --global wix --version 5.0.2
+      - uses: actions/cache@v4
+        with:
+          path: models/download
+          key: ai-models-${{ hashFiles('xtask/src/models.rs') }}
+      - name: AI mask models (download, check SHA-256, convert)
+        shell: pwsh
+        run: cargo xtask models --download
       - name: Build, sign, package
         shell: pwsh
         env:

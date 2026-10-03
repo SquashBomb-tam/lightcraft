@@ -434,3 +434,59 @@ fn auto_bw_mix_separates_colours() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_ne!(active_dev(&s).treatment, lightcraft_develop::Treatment::Bw, "one undo step");
 }
+
+#[test]
+fn object_masks_check_their_prompt() {
+    use lightcraft_develop::MaskShape;
+    let mut s = demo();
+    let object = |s: &Session, i: usize| match &active_dev(s).masks[i].components[0].shape {
+        MaskShape::Object { hint, bbox, exclude } => (hint.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), *bbox, exclude.len()),
+        other => panic!("not an object mask: {other:?}"),
+    };
+    // a click; a box drawn right to left (normalized); points a hair off the edge (clamped)
+    s.execute("mask.add", &json!({"kind": "object", "points": [[0.4, 0.5]]})).unwrap();
+    assert_eq!(object(&s, 0), (vec![(0.4, 0.5)], None, 0));
+    s.execute("mask.add", &json!({"kind": "object", "box": [0.7, 0.8, 0.2, 0.1]})).unwrap();
+    assert_eq!(object(&s, 1), (vec![], Some([0.2, 0.1, 0.7, 0.8]), 0));
+    s.execute("mask.add", &json!({"kind": "object", "points": [[1.005, -0.004]], "exclude": [[0.1, 0.1]]})).unwrap();
+    assert_eq!(object(&s, 2), (vec![(1.0, 0.0)], None, 1));
+    // bad requests are refused and change nothing
+    let bad = [
+        json!({"kind": "object"}),
+        json!({"kind": "object", "points": []}),
+        json!({"kind": "object", "points": [[1.5, 0.5]]}),
+        json!({"kind": "object", "points": [[0.5]]}),
+        json!({"kind": "object", "points": "middle"}),
+        json!({"kind": "object", "points": [["a", "b"]]}),
+        json!({"kind": "object", "exclude": [[0.5, 0.5]]}),
+        json!({"kind": "object", "box": [0.1, 0.2, 0.3]}),
+        json!({"kind": "object", "box": [0.1, 0.2, 0.3, 0.4, 0.5]}),
+        json!({"kind": "object", "box": [0.1, 0.1, 0.1005, 0.5]}),
+        json!({"kind": "object", "box": [-0.5, 0.1, 0.5, 0.5]}),
+        json!({"kind": "object", "box": "all"}),
+    ];
+    for b in &bad {
+        let e = s.execute("mask.add", b).expect_err(&b.to_string());
+        assert!(e.to_string().contains("mask.add"), "{e}");
+    }
+    assert_eq!(active_dev(&s).masks.len(), 3, "nothing was added by the bad requests");
+    // refining (Shift/Alt-click in the app) goes through the same checks
+    let mid = active_dev(&s).masks[0].id;
+    let good =
+        json!({"id": mid, "shape": {"kind": "object", "hint": [{"x": 0.4, "y": 0.5}, {"x": 0.45, "y": 0.55}], "exclude": [{"x": 0.9, "y": 0.9}]}});
+    s.execute("mask.update", &good).unwrap();
+    assert_eq!(object(&s, 0), (vec![(0.4, 0.5), (0.45, 0.55)], None, 1));
+    let off = json!({"id": mid, "shape": {"kind": "object", "hint": [{"x": 3.0, "y": 0.5}]}});
+    assert!(s.execute("mask.update", &off).is_err(), "a point off the photo");
+    let empty = json!({"id": mid, "shape": {"kind": "object", "hint": []}});
+    assert!(s.execute("mask.update", &empty).is_err(), "an empty prompt");
+    assert_eq!(object(&s, 0).0.len(), 2, "the refused updates changed nothing");
+    // no models in this session: the command says so
+    let m = s.execute("mask.models", &json!({})).unwrap();
+    assert_eq!(m, json!({"dir": null, "sky": false, "subject": false, "object": false, "busy": false}));
+    // without the models the photo still renders (the masks select nothing yet)
+    let id = s.active().unwrap();
+    let r = s.render_now(id, 120, 80).unwrap();
+    let (w, h) = (r.image.width, r.image.height);
+    assert!(w <= 120 && h <= 80 && (w == 120 || h == 80), "fits the box keeping its shape: {w}×{h}");
+}

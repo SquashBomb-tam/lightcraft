@@ -15,6 +15,7 @@ lightcraft-raster = { workspace = true }
 lightcraft-develop = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 lightcraft-scenes = { workspace = true }

@@ -445,6 +445,7 @@ pub fn render(
     s: &DevelopSettings,
     req: &RenderRequest,
     stages: Option<&GpuStages>,
+    seg: &lightcraft_pipeline::Segmentations,
 ) -> Option<Rendered> {
     let mut t = profiling().then(std::time::Instant::now);
     // Under `LIGHTCRAFT_PROFILE` each stage is submitted and waited for, so the timings are real.
@@ -506,7 +507,7 @@ pub fn render(
     }
 
     // 4. masks
-    let (masks, terms) = masks(&mut cx, &lin, &prep, &plan, &mut host);
+    let (masks, terms) = masks(&mut cx, &lin, &prep, &plan, &mut host, seg);
     lap("masks", &mut t, &mut cx);
 
     // 5. per-pixel stage
@@ -556,7 +557,8 @@ pub fn render(
         Err(m) => {
             let img = host.lin.get_or_insert_with(|| Arc::new(cx.read_rgb(&lin, w, h))).clone();
             let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(&prep.log_l, w, h))).clone();
-            lightcraft_pipeline::masks::evaluate_one(m, &plan.frame, w, h, &img, &l, s.light.exposure as f32)
+            let x = lightcraft_pipeline::masks::Inputs { frame: &plan.frame, w, h, img: &img, log_l: &l, ev: s.light.exposure as f32, seg };
+            lightcraft_pipeline::masks::evaluate_one(m, &x)
         }
     });
     lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref());
@@ -735,7 +737,14 @@ fn guided_cross_max(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, s
 /// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
 /// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
 /// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
-fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Host) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
+fn masks(
+    cx: &mut Cx<'_>,
+    lin: &Buf,
+    prep: &Prep,
+    plan: &Plan<'_>,
+    host: &mut Host,
+    seg: &lightcraft_pipeline::Segmentations,
+) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
     let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
@@ -847,7 +856,8 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
                     // no kernel: evaluate on the CPU
                     let img = host.lin.get_or_insert_with(|| Arc::new(cx.read_rgb(lin, w, h))).clone();
                     let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(&prep.log_l, w, h))).clone();
-                    let mut v = lightcraft_pipeline::masks::shape_alpha(&comp.shape, frame, w, h, &img, &l, ev);
+                    let x = lightcraft_pipeline::masks::Inputs { frame, w, h, img: &img, log_l: &l, ev, seg };
+                    let mut v = lightcraft_pipeline::masks::shape_alpha(&comp.shape, &x);
                     if comp.invert {
                         v.data.iter_mut().for_each(|x| *x = 1.0 - *x);
                     }

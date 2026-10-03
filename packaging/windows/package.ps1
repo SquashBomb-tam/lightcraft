@@ -5,7 +5,11 @@
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
     lightcraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
-    lightcraft-<version>-windows-<arch>-portable.zip   lightcraft.exe + lightcraft-cli.exe
+    lightcraft-<version>-windows-<arch>-portable.zip   lightcraft.exe + lightcraft-cli.exe + models\
+
+  Both include the AI mask models (models\*.safetensors with their licences, about 217 MB) from
+  the checkout's models\ folder: run `cargo xtask models --download` first. -NoModels builds
+  without them (Sky/Subject/Background then use classical estimates; Select Object is unavailable).
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
   zip needs the Visual C++ redistributable. Signing is delegated to sign.ps1 (skipped with a
@@ -20,7 +24,8 @@
 #>
 param(
   [ValidateSet('x64', 'x86')] [string] $Arch = 'x64',
-  [switch] $SkipBuild
+  [switch] $SkipBuild,
+  [switch] $NoModels
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -72,11 +77,28 @@ Copy-Item (Join-Path $Bin 'lightcraft.exe'), (Join-Path $Bin 'lightcraft-cli.exe
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'lightcraft.exe') (Join-Path $Stage 'lightcraft-cli.exe')
 
+# ---- AI mask models (models/README.md) ---------------------------------------------------------
+# Installed in a models\ folder beside the executables, where the app looks for them.
+$ModelsStage = $null
+if (-not $NoModels) {
+  $ModelsSrc = Join-Path $Root 'models'
+  $ModelFiles = 'object.safetensors', 'subject.safetensors', 'sky.safetensors'
+  $missing = @($ModelFiles | Where-Object { -not (Test-Path (Join-Path $ModelsSrc $_)) })
+  if ($missing.Count -gt 0) {
+    throw "AI mask models missing from ${ModelsSrc}: $($missing -join ', '). Run 'cargo xtask models --download' first, or pass -NoModels."
+  }
+  $ModelsStage = Join-Path $Stage 'models'
+  New-Item -ItemType Directory -Force -Path (Join-Path $ModelsStage 'licenses') | Out-Null
+  foreach ($f in $ModelFiles + 'README.md') { Copy-Item (Join-Path $ModelsSrc $f) $ModelsStage }
+  Copy-Item (Join-Path $ModelsSrc 'licenses\*.txt') (Join-Path $ModelsStage 'licenses')
+}
+
 # ---- MSI ---------------------------------------------------------------------------------------
 $Msi = Join-Path $Dist "lightcraft-$Version-windows-$Arch.msi"
 Invoke-Native 'wix build' {
+  $models = if ($ModelsStage) { @('-d', "ModelsDir=$ModelsStage") } else { @() }
   wix build (Join-Path $PSScriptRoot 'lightcraft.wxs') -arch $Arch `
-    -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\lightcraft.ico')" `
+    -d "Version=$MsiVersion" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\lightcraft.ico')" @models `
     -o $Msi
 }
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
@@ -88,6 +110,7 @@ $Portable = Join-Path $TargetDir "windows-package\lightcraft-$Version-windows-$A
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
+if ($ModelsStage) { Copy-Item -Recurse $ModelsStage (Join-Path $Portable 'models') }
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }

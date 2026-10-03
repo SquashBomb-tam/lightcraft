@@ -9,6 +9,7 @@ pub mod edit;
 pub mod filterbar;
 pub mod grid;
 pub mod left;
+pub mod mask_handles;
 pub mod masking;
 pub mod presets;
 pub mod profiles;

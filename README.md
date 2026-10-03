@@ -143,10 +143,12 @@ split view. Every image below is a real screenshot of LightCraft, captured autom
 ## Masking that goes where you point
 
 Paint with a **Brush** (size, feather, flow, density, erase), drop **Linear** and **Radial Gradients** with draggable
-pins, or select by **Luminance Range**, **Color Range**, **Sky**, **Subject** and **Background**. Combine components
-with **Add / Subtract / Intersect**, invert any of them, and dial in 15 local adjustments per mask (Temp, Tint,
-Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture, Clarity, Dehaze, Hue, Saturation, Sharpness, Noise)
-plus an overall Amount.
+pins (radials resize, rotate and feather from handles on the photo), or select by **Luminance Range** and **Color Range**.
+**Select Sky**, **Select Subject** and **Select Background** use AI segmentation, and **Select Object** picks out
+whatever you click or drag a box around (<kbd>Shift</kbd>+click adds to it, <kbd>Alt</kbd>+click takes away). Combine
+components with **Add / Subtract / Intersect**, invert any of them, and dial in 15 local adjustments per mask (Temp,
+Tint, Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture, Clarity, Dehaze, Hue, Saturation, Sharpness,
+Noise) plus an overall Amount. Press <kbd>H</kbd> to hide every mask while you judge the result under it.
 
 <p align="center">
   <img src="docs/images/masking.jpg" alt="Masking panel with a linear Sky mask and a radial Sun glow mask; the radial gradient is drawn as a red overlay around the sun on a lake scene" width="100%">
@@ -257,6 +259,9 @@ lightcraft --control 7980 ~/Pictures/trip
 
 ## Fast, native, private
 
+- **AI masks on your machine.** Sky, subject and object selection run locally on the CPU with permissively licensed
+  models (MobileSAM, U²-Net; see [models/README.md](models/README.md)). Nothing is uploaded; the first selection on a
+  photo takes a few seconds and is then remembered in the library.
 - **Pure Rust, no C.** Our own RAW decoders (DNG, Canon CR2, Sony ARW, Nikon NEF, Fujifilm RAF incl. X-Trans,
   Panasonic RW2, Pentax PEF, Olympus ORF), our own colour science, our own pipeline. JPEG, PNG, TIFF, WebP, PSD
   composites and JPEG XL open today.
@@ -289,7 +294,8 @@ Lightroom parity tracker (every feature, menu item and shortcut with its status,
 | Library: albums, folders, smart albums, stacks (incl. auto-stack), virtual copies, ratings, flags, labels, filter bar, search, sort, grids, filmstrip | ✅ |
 | Culling: Compare (synced zoom) and Survey views, auto-advance, instant previews | ✅ |
 | Light, Color, Effects (vignette styles), Tone Curve (+ refine saturation, targeted adjustment), Color Mixer (+ targeted), Point Color, Color Grading, Calibration, B&W | ✅ |
-| Masking: brush, linear, radial, luminance/colour range, add/subtract/intersect | ✅ (AI subject/sky use classical heuristics for now) |
+| Masking: brush, linear, radial, luminance/colour range, add/subtract/intersect | ✅ |
+| AI masks: sky, subject, background, object (click or box) | ✅ (with the models: `cargo xtask models --download`; installers include them) |
 | Crop, straighten tool + auto straighten, flip, rotate, aspect ratios, overlays | ✅ |
 | Profiles (Color, Neutral, Vivid, Landscape, Portrait, Monochrome: our own looks), presets, versions, history, copy/paste/sync settings | ✅ |
 | Native macOS menu bar (generated from the command registry), control channel + every widget addressable, headless UI snapshots | ✅ |
@@ -317,6 +323,7 @@ cargo run --release -p lightcraft                       # opens your library (~/
 cargo run --release -p lightcraft -- ~/Pictures/trip    # import your photos (folders are scanned, duplicates skipped)
 cargo run --release -p lightcraft -- --memory           # a throwaway in-memory demo session (writes nothing)
 cargo run --release -p lightcraft -- --control 7980     # with the automation channel
+cargo xtask models --download                           # the AI mask models (~400 MB download, ~217 MB installed)
 cargo xtask web --serve                                 # the same app in the browser: http://127.0.0.1:8080/
 cargo run --release -p lightcraft-cli -- render photo.jpg -o out.jpg --set light.exposure=0.5
 cargo xtask ci                                          # fmt, clippy, tests, layering, wasm checks
@@ -326,7 +333,7 @@ The web build needs the `wasm32-unknown-unknown` target and the matching `wasm-b
 (`cargo xtask web` prints the exact install command); see [docs/web.md](docs/web.md).
 
 **Keyboard:** <kbd>G</kbd> grid · <kbd>D</kbd> detail · <kbd>E</kbd> edit · <kbd>C</kbd> crop · <kbd>M</kbd> masking ·
-<kbd>Shift</kbd>+<kbd>P</kbd> presets · <kbd>\\</kbd> original · <kbd>Y</kbd> before/after · <kbd>Z</kbd> zoom ·
+<kbd>H</kbd> hide masks (while masking) · <kbd>Shift</kbd>+<kbd>P</kbd> presets · <kbd>\\</kbd> original · <kbd>Y</kbd> before/after · <kbd>Z</kbd> zoom ·
 <kbd>J</kbd> clipping · <kbd>⌘Z</kbd> undo · <kbd>⌘/</kbd> all shortcuts.
 
 ## How it's built
@@ -401,7 +408,8 @@ LightCraft is licensed under **MIT OR Apache-2.0**.
 Showcase photographs are public-domain works, used via Wikimedia Commons: Ansel Adams, *The Tetons and the Snake River*
 (1942, U.S. National Archives); Dorothea Lange, *Migrant Mother* (1936, Library of Congress); Bill Anders / NASA,
 *Earthrise* (1968); NASA, *The Blue Marble* (1972). The demo library is procedurally generated by LightCraft. UI font:
-Inter (SIL OFL). All icons are original. See [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md).
+Inter (SIL OFL). All icons are original. AI mask models: MobileSAM (Apache-2.0), U²-Net (Apache-2.0) and xiongzhu666's
+sky segmentation model (MIT); see [models/README.md](models/README.md). See [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md).
 
 <sub>Adobe, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. LightCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
 
